@@ -14,19 +14,33 @@ import {
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
+import { useAuth } from "@/lib/auth";
 import { COLORS, API_BASE } from "@/lib/constants";
-const TEMP_USER_ID = "user_001";
+
+type PickedFile = {
+  uri: string;
+  name?: string;
+  size?: number;
+  mimeType?: string;
+};
 
 export default function UploadScreen() {
-  const [selectedFile, setSelectedFile] = useState<any>(null);
+  const [selectedFile, setSelectedFile] = useState<PickedFile | null>(null);
   const [description, setDescription] = useState("");
   const [loading, setLoading] = useState(false);
   const [fileType, setFileType] = useState<"document" | "image">("document");
+  const { session } = useAuth();
 
   const pickDocument = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: ["application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/plain", "text/markdown"],
+        type: [
+          "application/pdf",
+          "application/msword",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "text/plain",
+          "text/markdown",
+        ],
         copyToCacheDirectory: true,
         multiple: false,
       });
@@ -35,40 +49,56 @@ export default function UploadScreen() {
         setSelectedFile(result.assets[0]);
         setFileType("document");
       }
-    } catch (err) {
-      Alert.alert("Error", "Could not pick document");
+    } catch (error) {
+      console.error("[Upload] pickDocument error:", error);
+      Alert.alert("Error", "Could not pick document.");
     }
   };
 
   const pickImage = async () => {
     try {
-      // Request media library permissions (ImagePicker docs)
-      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      const permissionResult =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
 
       if (!permissionResult.granted) {
-        Alert.alert("Permission required", "Media library access needed to pick images.");
+        Alert.alert(
+          "Permission required",
+          "Media library access is needed to pick images."
+        );
         return;
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ["images"],
         allowsEditing: true,
         aspect: [4, 3],
         quality: 0.8,
       });
 
-      if (!result.canceled && result.assets[0]) {
+      if (!result.canceled && result.assets && result.assets.length > 0) {
         setSelectedFile(result.assets[0]);
         setFileType("image");
       }
-    } catch (err) {
-      Alert.alert("Error", "Could not pick image");
+    } catch (error) {
+      console.error("[Upload] pickImage error:", error);
+      Alert.alert("Error", "Could not pick image.");
     }
   };
 
   const uploadFile = async () => {
+    const token = session?.access_token;
+
+    if (!token) {
+      Alert.alert("Login Required", "Please log in to upload files.");
+      router.push("/(auth)/login");
+      return;
+    }
+
     if (!selectedFile || !description.trim()) {
-      Alert.alert("Missing info", "Please select a file and add a description");
+      Alert.alert(
+        "Missing info",
+        "Please select a file and add a description."
+      );
       return;
     }
 
@@ -80,29 +110,33 @@ export default function UploadScreen() {
       formData.append("file", {
         uri: selectedFile.uri,
         name: selectedFile.name || `file_${Date.now()}`,
-        type: selectedFile.mimeType || "application/octet-stream",
+        type:
+          selectedFile.mimeType ||
+          (fileType === "image" ? "image/jpeg" : "application/octet-stream"),
       } as any);
 
       formData.append("description", description.trim());
-      formData.append("userId", TEMP_USER_ID);
       formData.append("fileType", fileType);
 
-      const res = await fetch(`/api/upload`, {
+      const res = await fetch(`${API_BASE}/api/upload`, {
         method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
         body: formData,
       });
 
       const data = await res.json();
 
-      if (data.error) {
-        Alert.alert("Upload failed", data.error);
+      if (!res.ok || data?.error) {
+        Alert.alert("Upload failed", data?.error || "Could not upload file.");
         return;
       }
 
-      // Success → go back to chat
-      // File is saved silently, no UI shown
+      Alert.alert("Success", "File saved successfully.");
       router.back();
-    } catch (err) {
+    } catch (error) {
+      console.error("[Upload] uploadFile error:", error);
       Alert.alert("Error", "Upload failed. Please try again.");
     } finally {
       setLoading(false);
@@ -112,24 +146,24 @@ export default function UploadScreen() {
   const clearFile = () => {
     setSelectedFile(null);
     setDescription("");
+    setFileType("document");
   };
 
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="light-content" backgroundColor={COLORS.background} />
 
-      {/* Header */}
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} style={styles.backBtn}>
           <Text style={styles.backText}>← Back</Text>
         </Pressable>
+
         <Text style={styles.headerTitle}>Upload File</Text>
+
         <View style={styles.headerRight} />
       </View>
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
-
-        {/* Pick buttons */}
         {!selectedFile && (
           <View style={styles.pickSection}>
             <Text style={styles.sectionLabel}>Choose what to upload</Text>
@@ -137,24 +171,28 @@ export default function UploadScreen() {
             <Pressable style={styles.pickBtn} onPress={pickDocument}>
               <Text style={styles.pickIcon}>📄</Text>
               <Text style={styles.pickTitle}>Document / PDF</Text>
-              <Text style={styles.pickSub}>PDF, Word, Text files, Markdown</Text>
+              <Text style={styles.pickSub}>
+                PDF, Word, Text files, Markdown
+              </Text>
             </Pressable>
 
             <Pressable style={styles.pickBtn} onPress={pickImage}>
               <Text style={styles.pickIcon}>🖼️</Text>
               <Text style={styles.pickTitle}>Image / Photo</Text>
-              <Text style={styles.pickSub}>JPG, PNG, screenshots (crop & edit)</Text>
+              <Text style={styles.pickSub}>
+                JPG, PNG, screenshots (crop & edit)
+              </Text>
             </Pressable>
           </View>
         )}
 
-        {/* Selected file preview */}
         {selectedFile && (
           <View style={styles.filePreview}>
             <View style={styles.filePreviewHeader}>
               <Text style={styles.filePreviewIcon}>
                 {fileType === "image" ? "🖼️" : "📄"}
               </Text>
+
               <View style={styles.filePreviewInfo}>
                 <Text style={styles.filePreviewName} numberOfLines={1}>
                   {selectedFile.name || "Selected file"}
@@ -162,9 +200,10 @@ export default function UploadScreen() {
                 <Text style={styles.filePreviewSize}>
                   {selectedFile.size
                     ? `${(selectedFile.size / 1024).toFixed(1)} KB`
-                    : ""}
+                    : "Unknown size"}
                 </Text>
               </View>
+
               <Pressable onPress={clearFile} style={styles.clearBtn}>
                 <Text style={styles.clearText}>✕</Text>
               </Pressable>
@@ -172,12 +211,12 @@ export default function UploadScreen() {
           </View>
         )}
 
-        {/* Description input */}
         <View style={styles.descSection}>
           <Text style={styles.sectionLabel}>Add a description *</Text>
           <Text style={styles.sectionHint}>
-            This helps you find the file later. Be specific!
+            This helps you find the file later. Be specific.
           </Text>
+
           <TextInput
             style={styles.descInput}
             value={description}
@@ -188,18 +227,21 @@ export default function UploadScreen() {
             numberOfLines={4}
             maxLength={300}
           />
+
           <Text style={styles.charCount}>{description.length}/300</Text>
         </View>
 
-        {/* Tips */}
         <View style={styles.tipsBox}>
           <Text style={styles.tipsTitle}>💡 Good description examples:</Text>
-          <Text style={styles.tipItem}>• "Receipt for groceries from Shoprite"</Text>
-          <Text style={styles.tipItem}>• "My class assignment notes March 2026"</Text>
-          <Text style={styles.tipItem}>• "Payment proof for rent March"</Text>
+          <Text style={styles.tipItem}>
+            • Receipt for groceries from Shoprite
+          </Text>
+          <Text style={styles.tipItem}>
+            • My class assignment notes March 2026
+          </Text>
+          <Text style={styles.tipItem}>• Payment proof for rent March</Text>
         </View>
 
-        {/* Upload button */}
         {selectedFile && (
           <Pressable
             style={[
@@ -218,8 +260,8 @@ export default function UploadScreen() {
         )}
 
         <Text style={styles.noteText}>
-          🔒 Your file will be saved privately. No preview will be shown in chat.
-          Ask me to find it anytime.
+          🔒 Your file will be saved privately. No preview will be shown in
+          chat. Ask me to find it anytime.
         </Text>
       </ScrollView>
     </SafeAreaView>
@@ -297,6 +339,7 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     fontSize: 12,
     marginTop: 4,
+    textAlign: "center",
   },
   filePreview: {
     backgroundColor: COLORS.card,

@@ -10,10 +10,10 @@ import {
   Platform,
   ActivityIndicator,
   StatusBar,
-  SafeAreaView,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
-import { useAuth } from '@/lib/auth';
+import { useAuth } from "@/lib/auth";
 import { ChatBubble } from "@/components/chat/ChatBubble";
 import { ChatMessage } from "@/lib/types";
 import { COLORS } from "@/lib/constants";
@@ -23,12 +23,12 @@ const WELCOME_MESSAGE: ChatMessage = {
   role: "assistant",
   type: "assistant",
   message:
-    "Hello! I am Memora 👋\n\nI can help you:\n💾 Save: 'save these [your info]'\n🔍 Find: 'show my [topic]'\n📄 Upload: Tap the + button\n\nWhat would you like to save today?",
+    "Hello! I am Memora 👋\n\nI can help you:\n💾 Save: 'save my [your info]'\n🔍 Find: 'show my [topic]'\n📄 Upload: Tap the + button\n\nWhat would you like to save today?",
   createdAt: new Date().toISOString(),
 };
 
 export default function ChatScreen() {
-  const { user, session } = useAuth(); // ✅ added session
+  const { user, session } = useAuth();
   const userId = user?.id;
 
   const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE]);
@@ -37,10 +37,10 @@ export default function ChatScreen() {
   const flatListRef = useRef<FlatList<ChatMessage>>(null);
 
   useEffect(() => {
-    if (userId && session) { // ✅ wait for both user and session
+    if (userId && session?.access_token) {
       loadChatHistory();
     }
-  }, [userId, session]);
+  }, [userId, session?.access_token]);
 
   const scrollToBottom = (animated = true) => {
     requestAnimationFrame(() => {
@@ -50,14 +50,12 @@ export default function ChatScreen() {
 
   const loadChatHistory = async () => {
     try {
-      const res = await fetch(
-        `/api/chat?userId=${encodeURIComponent(userId!)}`,
-        {
-          headers: {
-            Authorization: `Bearer ${session?.access_token}`, // ✅ auth header
-          },
-        }
-      );
+      const res = await fetch("/api/chat", {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${session?.access_token}`,
+        },
+      });
 
       if (!res.ok) return;
 
@@ -66,24 +64,43 @@ export default function ChatScreen() {
       if (Array.isArray(data?.messages) && data.messages.length > 0) {
         const history: ChatMessage[] = data.messages.map(
           (m: any, index: number) => ({
-            id: String(m.id ?? `history-${index}-${m.created_at ?? Date.now()}`),
+            id: String(m.id ?? `history-${index}-${Date.now()}`),
             role: m.role,
             type: m.role === "user" ? "text" : "assistant",
             message: m.message ?? "",
             createdAt: m.created_at ?? new Date().toISOString(),
           })
         );
+
         setMessages([WELCOME_MESSAGE, ...history]);
+
+        requestAnimationFrame(() => {
+          scrollToBottom(false);
+        });
       }
     } catch (error) {
-      console.log("Could not load history:", error);
+      console.log("[Chat] Could not load history:", error);
     }
   };
 
   const sendMessage = async () => {
     const trimmedInput = input.trim();
 
-    if (!trimmedInput || loading || !userId || !session) return; // ✅ check session too
+    if (!trimmedInput || loading) return;
+
+    if (!userId || !session?.access_token) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          role: "assistant",
+          type: "system",
+          message: "Please log in to continue.",
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+      return;
+    }
 
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
@@ -96,29 +113,38 @@ export default function ChatScreen() {
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setLoading(true);
-    scrollToBottom();
+
+    requestAnimationFrame(() => {
+      scrollToBottom();
+    });
 
     try {
+      console.log("[Chat] Sending:", trimmedInput);
+      console.log("[Chat] Token:", session.access_token ? "✅" : "❌ missing");
+
+      const bodyString = JSON.stringify({ message: trimmedInput });
+
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`, // ✅ auth header
+          "content-type": "application/json",
+          authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({
-          message: userMessage.message,
-          userId: userId,
-        }),
+        body: bodyString,
       });
+
+      console.log("[Chat] Status:", res.status);
 
       const data = await res.json();
 
+      console.log("[Chat] Response:", data);
+
       if (!res.ok) {
-        throw new Error(data?.message || "Request failed");
+        throw new Error(data?.message || `Server error ${res.status}`);
       }
 
       const assistantMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
+        id: `${Date.now()}-assistant`,
         role: "assistant",
         type: data?.type || "assistant",
         message: data?.message || "No response returned.",
@@ -128,11 +154,12 @@ export default function ChatScreen() {
 
       setMessages((prev) => [...prev, assistantMessage]);
     } catch (error) {
-      console.log("Send message error:", error);
+      console.log("[Chat] Send error:", error);
+
       setMessages((prev) => [
         ...prev,
         {
-          id: (Date.now() + 1).toString(),
+          id: `${Date.now()}-error`,
           role: "assistant",
           type: "system",
           message: "Something went wrong. Please try again.",
@@ -141,14 +168,16 @@ export default function ChatScreen() {
       ]);
     } finally {
       setLoading(false);
-      scrollToBottom();
+      requestAnimationFrame(() => {
+        scrollToBottom();
+      });
     }
   };
 
   if (!userId) return null;
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={["top", "left", "right", "bottom"]}>
       <StatusBar barStyle="light-content" backgroundColor={COLORS.background} />
 
       <View style={styles.header}>
@@ -156,24 +185,22 @@ export default function ChatScreen() {
           <View style={styles.logoCircle}>
             <Text style={styles.logoText}>M</Text>
           </View>
+
           <View>
             <Text style={styles.headerTitle}>Memora</Text>
             <Text style={styles.headerSub}>Your private memory</Text>
           </View>
         </View>
 
-        <Pressable
-          style={styles.uploadBtn}
-          onPress={() => router.push("/upload")}
-        >
+        <Pressable style={styles.uploadBtn} onPress={() => router.push("/upload")}>
           <Text style={styles.uploadBtnText}>+</Text>
         </Pressable>
       </View>
 
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        keyboardVerticalOffset={0}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 8 : 0}
       >
         <FlatList
           ref={flatListRef}
@@ -183,6 +210,7 @@ export default function ChatScreen() {
           contentContainerStyle={styles.chatContent}
           onContentSizeChange={() => scrollToBottom(false)}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
         />
 
         {loading && (
@@ -190,6 +218,7 @@ export default function ChatScreen() {
             <View style={styles.avatar}>
               <Text style={styles.avatarText}>M</Text>
             </View>
+
             <View style={styles.typingBubble}>
               <ActivityIndicator size="small" color={COLORS.primary} />
               <Text style={styles.typingText}>Thinking...</Text>
@@ -206,6 +235,13 @@ export default function ChatScreen() {
             placeholderTextColor={COLORS.textSecondary}
             multiline
             maxLength={1000}
+            returnKeyType="send"
+            blurOnSubmit={false}
+            onSubmitEditing={() => {
+              if (!loading && input.trim()) {
+                sendMessage();
+              }
+            }}
           />
 
           <Pressable
@@ -216,7 +252,9 @@ export default function ChatScreen() {
             onPress={sendMessage}
             disabled={!input.trim() || loading}
           >
-            <Text style={styles.sendIcon}>↑</Text>
+            <Text style={styles.sendText}>
+              {loading ? "..." : "Send"}
+            </Text>
           </Pressable>
         </View>
       </KeyboardAvoidingView>
@@ -327,7 +365,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-end",
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingTop: 10,
+    paddingBottom: 12,
     borderTopWidth: 1,
     borderTopColor: COLORS.border,
     backgroundColor: COLORS.background,
@@ -338,27 +377,29 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.card,
     borderRadius: 22,
     paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingVertical: 12,
     color: COLORS.text,
     fontSize: 15,
     maxHeight: 120,
     borderWidth: 1,
     borderColor: COLORS.border,
+    textAlignVertical: "top",
   },
   sendBtn: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    minWidth: 72,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: COLORS.primary,
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: 16,
   },
   sendBtnDisabled: {
     backgroundColor: COLORS.border,
   },
-  sendIcon: {
+  sendText: {
     color: COLORS.text,
-    fontSize: 18,
+    fontSize: 15,
     fontWeight: "700",
   },
 });

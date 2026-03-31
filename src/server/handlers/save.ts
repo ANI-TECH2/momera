@@ -6,48 +6,12 @@ import {
   normalizeText,
 } from "../helpers";
 import { buildSaveReply } from "../nlp/replyBuilder";
+import { ExtractedEntity } from "@/app/api/chat+api";
 
-type SaveEntity = {
-  entity: string;
-  sourceText: string;
-  value?: string;
-  accuracy?: number;
-};
-
-type SavePayload = {
-  message?: string;
-  entities?: SaveEntity[];
-  intentScore?: number;
-  intentSource?: string;
-};
-
-function isRequestLike(value: unknown): value is Request {
-  return !!value && typeof value === "object" && "json" in value;
-}
+type SaveEntity = ExtractedEntity;
 
 function safeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function extractMessageFromPayload(
-  input: Request | string | SavePayload
-): Promise<SavePayload> | SavePayload {
-  if (typeof input === "string") {
-    return { message: input };
-  }
-
-  if (isRequestLike(input)) {
-    return input
-      .json()
-      .then((body) => (body && typeof body === "object" ? body as SavePayload : {}))
-      .catch(() => ({}));
-  }
-
-  if (input && typeof input === "object") {
-    return input;
-  }
-
-  return {};
 }
 
 function getBestSaveContent(message: string, entities: SaveEntity[] = []): string {
@@ -55,36 +19,23 @@ function getBestSaveContent(message: string, entities: SaveEntity[] = []): strin
 
   if (extracted.length >= 2) return extracted;
 
-  // fallback: rebuild from useful entities when extractContent is too weak
   const usefulEntities = entities
     .filter((item) =>
-      [
-        "phone",
-        "email",
-        "money",
-        "date_like",
-        "place",
-        "keyword",
-        "name_like",
-      ].includes(item.entity)
+      ["phone", "email", "money", "date_like", "place", "keyword", "name_like"].includes(item.entity)
     )
     .map((item) => safeString(item.sourceText))
     .filter(Boolean);
 
-  if (usefulEntities.length > 0) {
-    return usefulEntities.join(" ");
-  }
+  if (usefulEntities.length > 0) return usefulEntities.join(" ");
 
   return extracted;
 }
 
-// ─── SAVE HANDLER ─────────────────────────────────────────────
-// Supports:
-// handleSave("save john 0803...", userId)
-// handleSave(request, userId)
+// ✅ Updated signature — accepts (message: string, userId: string, entities: ExtractedEntity[])
 export async function handleSave(
-  input: Request | string | SavePayload,
-  userId: string
+  message: string,
+  userId: string,
+  entities: SaveEntity[] = []
 ) {
   if (!userId) {
     return Response.json(
@@ -94,11 +45,9 @@ export async function handleSave(
   }
 
   try {
-    const payload = await extractMessageFromPayload(input);
-    const message = safeString(payload.message);
-    const entities = Array.isArray(payload.entities) ? payload.entities : [];
+    const cleanMessage = safeString(message);
 
-    if (!message) {
+    if (!cleanMessage) {
       return Response.json(
         { type: "system", message: "Missing message" },
         { status: 400 }
@@ -106,13 +55,13 @@ export async function handleSave(
     }
 
     // Step 1: Extract content
-    const content = getBestSaveContent(message, entities);
+    const content = getBestSaveContent(cleanMessage, entities);
 
     if (!content || content.length < 2) {
       return Response.json({
-        type: "system",
+        type: "assistant",
         message:
-          "What do you want me to save? Please add the content after the save keyword.\n\nExample: 'save my classmate John 08012345678'",
+          "What do you want me to save? Please add the content after the save keyword.\n\nExample: *'Save my classmate John 08012345678'*",
       });
     }
 
@@ -136,11 +85,8 @@ export async function handleSave(
 
     if (existing) {
       return Response.json({
-        type: "system",
-        message: `⚠️ Already saved!\n\n"${existing.content.slice(
-          0,
-          100
-        )}"\n\nSay 'replace it' to overwrite or 'keep both' to save again.`,
+        type: "assistant",
+        message: `⚠️ Already saved!\n\n"${safeString(existing.content).slice(0, 100)}"\n\nSay *'replace it'* to overwrite or *'keep both'* to save again.`,
         duplicate: true,
         existingId: existing.id,
       });
@@ -160,9 +106,7 @@ export async function handleSave(
         normalized_content: normalizedContent,
         metadata: {
           entities,
-          intentScore: payload.intentScore ?? null,
-          intentSource: payload.intentSource ?? null,
-          originalMessage: message,
+          originalMessage: cleanMessage,
         },
         created_at: new Date().toISOString(),
       })
@@ -172,10 +116,7 @@ export async function handleSave(
     if (insertError) {
       console.error("[Save Handler] Insert error:", insertError);
       return Response.json(
-        {
-          type: "system",
-          message: "❌ Failed to save. Please try again.",
-        },
+        { type: "system", message: "❌ Failed to save. Please try again." },
         { status: 500 }
       );
     }
@@ -188,6 +129,7 @@ export async function handleSave(
       message: reply,
       note: inserted ?? null,
     });
+
   } catch (error) {
     console.error("[Save Handler] Unexpected error:", error);
     return Response.json(

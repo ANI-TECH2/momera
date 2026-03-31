@@ -19,7 +19,10 @@
       "adaptiveIcon": {
         "backgroundColor": "#0D0F1A"
       },
-      "package": "com.memora.app"
+      "package": "com.memora.app",
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -31,13 +34,10 @@
         "expo-image-picker",
         {
           "photosPermission": "Allow Memora to access your photos for uploading images.",
-          "cameraPermission": "Allow Memora to access your camera.",
-          "microphonePermission": false
+          "cameraPermission": "Allow Memora to access your camera."
         }
       ],
-      [
-        "expo-document-picker"
-      ],
+      "expo-document-picker",
       "expo-web-browser"
     ],
     "experiments": {
@@ -46,7 +46,7 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "7fd033e8-0f37-47a6-8c7f-8237a2475108"
+        "projectId": "6319cd24-e3c9-4cfc-a2b9-a097311b2b4e"
       }
     }
   }

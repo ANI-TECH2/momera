@@ -1,195 +1,203 @@
 import { serverSupabase } from "@/server/supabase";
-import { extractSearchKeyword, normalizeText } from "@/server/helpers";
 import { buildSmartReply } from "@/server/nlp/replyBuilder";
-
-type RetrieveEntity = {
-  entity: string;
-  sourceText: string;
-  value?: string;
-  accuracy?: number;
-};
-
-type RetrievePayload = {
-  message?: string;
-  entities?: RetrieveEntity[];
-  intentScore?: number;
-  intentSource?: string;
-};
+import { ExtractedEntity } from "@/app/api/chat+api";
 
 type NoteRow = {
   id: string;
-  user_id: string;
   title?: string | null;
   content?: string | null;
   category?: string | null;
-  normalized_content?: string | null;
   created_at?: string | null;
-  metadata?: any;
+  [key: string]: unknown;
 };
 
-function isRequestLike(value: unknown): value is Request {
-  return !!value && typeof value === "object" && "json" in value;
-}
+type FileRow = {
+  id: string;
+  file_name?: string | null;
+  description?: string | null;
+  file_type?: string | null;
+  file_path: string;
+  created_at?: string | null;
+};
 
 function safeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-async function extractPayload(
-  input: Request | string | RetrievePayload
-): Promise<RetrievePayload> {
-  if (typeof input === "string") {
-    return { message: input };
-  }
+function escapeLike(value: string): string {
+  return value.replace(/[%_]/g, "\\$&");
+}
 
-  if (isRequestLike(input)) {
-    return input
-      .json()
-      .then((body) =>
-        body && typeof body === "object" ? (body as RetrievePayload) : {}
-      )
-      .catch(() => ({}));
-  }
-
-  return input ?? {};
+function extractPhones(text: string): string[] {
+  const matches = text.match(/(?:\+?\d[\d\s\-()]{8,}\d)/g) ?? [];
+  const cleaned = matches.map((item) => item.replace(/[^\d+]/g, "")).filter(Boolean);
+  return [...new Set(cleaned)];
 }
 
 function normalizePhone(value: string): string {
   const digits = value.replace(/\D/g, "");
   if (!digits) return "";
-
   if (digits.startsWith("234")) return digits;
-  if (digits.startsWith("0")) return `234${digits.slice(1)}`;
-
+  if (digits.startsWith("0") && digits.length >= 11) return `234${digits.slice(1)}`;
   return digits;
 }
 
-function extractPhones(text: string): string[] {
-  const matches = text.match(/(?:\+?\d[\d\s-]{7,}\d)/g) ?? [];
-  return [...new Set(matches.map((item) => normalizePhone(item)).filter(Boolean))];
+function getPhoneVariants(value: string): string[] {
+  const digits = value.replace(/\D/g, "");
+  if (!digits) return [];
+  const variants = new Set<string>();
+  if (digits.startsWith("0")) {
+    variants.add(digits);
+    if (digits.length >= 11) variants.add(`234${digits.slice(1)}`);
+  } else if (digits.startsWith("234")) {
+    variants.add(digits);
+    variants.add(`0${digits.slice(3)}`);
+  } else {
+    variants.add(digits);
+  }
+  return [...variants];
 }
 
-function normalizeKeyword(keyword: string): string {
-  return normalizeText(keyword || "").trim();
-}
-
-function getSearchKeyword(message: string): string {
-  const extracted = safeString(extractSearchKeyword(message));
-  if (extracted) return extracted;
-
+function cleanKeyword(message: string): string {
   return message
+    .toLowerCase()
     .replace(
-      /^(show|find|get|retrieve|search(?:\s+for)?|look\s+up|what\s+is|what\s+was|do\s+i\s+have)\s+/i,
+      /^(show\s+me\s+my|show\s+my|find\s+my|get\s+my|retrieve|search\s+for|search|look\s+up|what\s+is\s+my|what\s+was\s+my|do\s+i\s+have)\s+/i,
       ""
     )
-    .replace(/\b(my|me|please)\b/gi, " ")
+    .replace(/\b(my|me|please|the|a|an|i|saved?|stored?|for|about)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function noteToSearchBlob(note: NoteRow): string {
-  return normalizeText(
-    [
-      note.title ?? "",
-      note.content ?? "",
-      note.category ?? "",
-      note.normalized_content ?? "",
-    ].join(" ")
-  );
+function splitKeywords(keyword: string): string[] {
+  return [...new Set(
+    keyword.split(/\s+/).map((w) => w.trim()).filter((w) => w.length > 1)
+  )];
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function buildFtsQuery(keyword: string): string {
+  return splitKeywords(keyword)
+    .map((w) => `'${w.replace(/'/g, " ")}'`)
+    .join(" | ");
 }
 
-function scoreNote(note: NoteRow, keyword: string, phones: string[]): number {
-  const content = safeString(note.content);
+function summarizeNote(note: NoteRow, index: number): string {
   const title = safeString(note.title);
-  const category = safeString(note.category);
-  const normalizedBlob = noteToSearchBlob(note);
-
-  let score = 0;
-
-  const normalizedKeyword = normalizeKeyword(keyword);
-  const normalizedTitle = normalizeText(title);
-  const normalizedContent = normalizeText(content);
-  const normalizedCategory = normalizeText(category);
-
-  // ── PHONE / NUMBER PRIORITY ────────────────────────────────
-  if (phones.length > 0) {
-    const contentPhones = extractPhones(content);
-    const titlePhones = extractPhones(title);
-    const metadataPhones = Array.isArray(note.metadata?.phones)
-      ? note.metadata.phones
-          .map((p: unknown) => normalizePhone(String(p ?? "")))
-          .filter(Boolean)
-      : [];
-
-    const allStoredPhones = [...new Set([...contentPhones, ...titlePhones, ...metadataPhones])];
-
-    for (const phone of phones) {
-      if (allStoredPhones.includes(phone)) {
-        score += 1000; // exact stored phone match should win first
-      } else if (allStoredPhones.some((p) => p.includes(phone) || phone.includes(p))) {
-        score += 600;
-      }
-    }
-  }
-
-  // ── EXACT TEXT PRIORITY ────────────────────────────────────
-  if (normalizedKeyword) {
-    if (normalizedContent === normalizedKeyword) score += 900;
-    if (normalizedTitle === normalizedKeyword) score += 850;
-    if (normalizedCategory === normalizedKeyword) score += 300;
-
-    if (normalizedContent.includes(normalizedKeyword)) score += 260;
-    if (normalizedTitle.includes(normalizedKeyword)) score += 220;
-    if (normalizedCategory.includes(normalizedKeyword)) score += 120;
-
-    const exactWordRegex = new RegExp(`\\b${escapeRegExp(normalizedKeyword)}\\b`, "i");
-    if (exactWordRegex.test(normalizedBlob)) score += 180;
-
-    const keywordWords = normalizedKeyword.split(/\s+/).filter(Boolean);
-    for (const word of keywordWords) {
-      if (!word) continue;
-      const wordRegex = new RegExp(`\\b${escapeRegExp(word)}\\b`, "i");
-      if (wordRegex.test(normalizedBlob)) score += 40;
-    }
-  }
-
-  // ── SMALL RECENCY BONUS ────────────────────────────────────
-  if (note.created_at) {
-    const createdTime = new Date(note.created_at).getTime();
-    if (!Number.isNaN(createdTime)) {
-      const ageMs = Date.now() - createdTime;
-      const oneDay = 24 * 60 * 60 * 1000;
-      if (ageMs < oneDay) score += 20;
-      else if (ageMs < 7 * oneDay) score += 10;
-    }
-  }
-
-  return score;
+  const content = safeString(note.content);
+  const preview = title || content;
+  return `${index + 1}. ${preview.slice(0, 100)}`;
 }
 
-function buildMultipleNotesMessage(keyword: string, notes: NoteRow[]): string {
-  const label = keyword || "your search";
-  const lines = notes.slice(0, 5).map((note, index) => {
-    const preview = safeString(note.content).slice(0, 90);
-    return `${index + 1}. ${preview}`;
-  });
-
-  return `I found ${notes.length} matches for "${label}". Here are the closest ones:\n\n${lines.join(
-    "\n"
-  )}`;
+function detectFileIntent(message: string) {
+  return {
+    lookingForDoc: /\b(document|doc|pdf|file|receipt|invoice)\b/i.test(message),
+    lookingForImage: /\b(image|photo|picture|img|screenshot)\b/i.test(message),
+  };
 }
 
-// ─── RETRIEVE HANDLER ─────────────────────────────────────────
-// Supports:
-// handleRetrieve("find john", userId)
-// handleRetrieve(request, userId)
+function dedupeNotes(notes: NoteRow[]): NoteRow[] {
+  const seen = new Set<string>();
+  const output: NoteRow[] = [];
+  for (const note of notes) {
+    const id = String(note.id ?? "");
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    output.push(note);
+  }
+  return output;
+}
+
+// ─── DB SEARCH FUNCTIONS ──────────────────────────────────────
+
+async function searchDocuments(userId: string, keyword: string) {
+  const safeKeyword = escapeLike(keyword);
+  const { data, error } = await serverSupabase
+    .from("documents").select("*").eq("user_id", userId)
+    .or(`description.ilike.%${safeKeyword}%,file_name.ilike.%${safeKeyword}%,file_type.ilike.%${safeKeyword}%`)
+    .order("created_at", { ascending: false }).limit(5);
+  if (error) { console.error("[Retrieve] Documents search error:", error); return null; }
+  return (data ?? []) as FileRow[];
+}
+
+async function searchImages(userId: string, keyword: string) {
+  const safeKeyword = escapeLike(keyword);
+  const { data, error } = await serverSupabase
+    .from("images").select("*").eq("user_id", userId)
+    .or(`description.ilike.%${safeKeyword}%,file_name.ilike.%${safeKeyword}%`)
+    .order("created_at", { ascending: false }).limit(5);
+  if (error) { console.error("[Retrieve] Images search error:", error); return null; }
+  return (data ?? []) as FileRow[];
+}
+
+async function createSignedUrl(bucket: string, filePath: string) {
+  const { data, error } = await serverSupabase.storage.from(bucket).createSignedUrl(filePath, 600);
+  if (error) { console.error(`[Retrieve] Signed URL error:`, error); return null; }
+  return data?.signedUrl ?? null;
+}
+
+async function searchNotesByPhones(userId: string, phoneVariants: string[]) {
+  if (!phoneVariants.length) return null;
+  const phoneQueries = phoneVariants
+    .filter(Boolean)
+    .flatMap((p) => [
+      `content.ilike.%${escapeLike(p)}%`,
+      `title.ilike.%${escapeLike(p)}%`,
+    ])
+    .join(",");
+  if (!phoneQueries) return null;
+  const { data, error } = await serverSupabase
+    .from("notes").select("*").eq("user_id", userId).or(phoneQueries)
+    .order("created_at", { ascending: false }).limit(5);
+  if (error) { console.error("[Retrieve] Phone search error:", error); return null; }
+  return (data ?? []) as NoteRow[];
+}
+
+async function searchNotesByFts(userId: string, keyword: string) {
+  if (!keyword) return null;
+  const ftsQuery = buildFtsQuery(keyword);
+  if (!ftsQuery) return null;
+  const { data, error } = await serverSupabase
+    .from("notes").select("*").eq("user_id", userId)
+    .textSearch("fts", ftsQuery)
+    .order("created_at", { ascending: false }).limit(5);
+  if (error) { console.error("[Retrieve] FTS search error:", error); return null; }
+  return (data ?? []) as NoteRow[];
+}
+
+async function searchNotesByKeywords(userId: string, keyword: string) {
+  const words = splitKeywords(keyword);
+  if (!words.length) return null;
+  const orQuery = words
+    .flatMap((word) => {
+      const safeWord = escapeLike(word);
+      return [
+        `content.ilike.%${safeWord}%`,
+        `title.ilike.%${safeWord}%`,
+        `category.ilike.%${safeWord}%`,
+      ];
+    })
+    .join(",");
+  const { data, error } = await serverSupabase
+    .from("notes").select("*").eq("user_id", userId).or(orQuery)
+    .order("created_at", { ascending: false }).limit(5);
+  if (error) { console.error("[Retrieve] Keyword search error:", error); return null; }
+  return (data ?? []) as NoteRow[];
+}
+
+async function fetchRecentNotes(userId: string) {
+  const { data, error } = await serverSupabase
+    .from("notes").select("*").eq("user_id", userId)
+    .order("created_at", { ascending: false }).limit(3);
+  if (error) { console.error("[Retrieve] Recent notes error:", error); return null; }
+  return (data ?? []) as NoteRow[];
+}
+
+// ─── MAIN HANDLER ─────────────────────────────────────────────
 export async function handleRetrieve(
-  input: Request | string | RetrievePayload,
-  userId: string
+  message: string,        // ✅ always a plain string
+  userId: string,
+  entities: ExtractedEntity[] = []
 ) {
   if (!userId) {
     return Response.json(
@@ -198,213 +206,148 @@ export async function handleRetrieve(
     );
   }
 
+  // ✅ Safe string guard — no more .trim() on non-strings
+  const cleanMessage = typeof message === "string"
+    ? message.trim()
+    : String(message ?? "").trim();
+
+  console.log(`[Retrieve] message: "${cleanMessage}" | entities: ${entities.length}`);
+
+  if (!cleanMessage) {
+    return Response.json(
+      { type: "system", message: "No search query provided." },
+      { status: 400 }
+    );
+  }
+
   try {
-    const payload = await extractPayload(input);
-    const message = safeString(payload.message);
-    const entities = Array.isArray(payload.entities) ? payload.entities : [];
+    const lowerKeyword = cleanKeyword(cleanMessage);
 
-    if (!message) {
-      return Response.json(
-        { type: "system", message: "Missing message" },
-        { status: 400 }
-      );
-    }
-
-    const keyword = getSearchKeyword(message);
-    const lower = message.toLowerCase();
-
-    const lookingForDoc =
-      lower.includes("document") ||
-      lower.includes("doc") ||
-      lower.includes("pdf") ||
-      lower.includes("file") ||
-      (lower.includes("receipt") && lower.includes("upload"));
-
-    const lookingForImage =
-      lower.includes("image") ||
-      lower.includes("photo") ||
-      lower.includes("picture") ||
-      lower.includes("img");
-
-    const phonesFromMessage = extractPhones(message);
-    const phonesFromKeyword = extractPhones(keyword);
-    const phonesFromEntities = entities
+    // ✅ Use phone entities from NLP if available, else extract from text
+    const entityPhones = entities
       .filter((e) => e.entity === "phone")
-      .map((e) => normalizePhone(e.sourceText));
+      .map((e) => safeString(e.value ?? e.sourceText));
 
-    const allPhones = [
-      ...new Set([...phonesFromMessage, ...phonesFromKeyword, ...phonesFromEntities].filter(Boolean)),
+    const rawPhones = entityPhones.length ? entityPhones : extractPhones(cleanMessage);
+    const normalizedPhones = rawPhones.map(normalizePhone).filter(Boolean);
+    const phoneVariants = [
+      ...new Set(
+        [...rawPhones, ...normalizedPhones].flatMap((p) => getPhoneVariants(p))
+      ),
     ];
 
-    // ─── SEARCH DOCUMENTS ─────────────────────────────────────
+    console.log(`[Retrieve] keyword="${lowerKeyword}" phones=${JSON.stringify(phoneVariants)}`);
+
+    const { lookingForDoc, lookingForImage } = detectFileIntent(cleanMessage);
+
+    // ─── DOCUMENTS ────────────────────────────────────────
     if (lookingForDoc) {
-      const { data: docs, error: docsError } = await serverSupabase
-        .from("documents")
-        .select("*")
-        .eq("user_id", userId)
-        .ilike("description", `%${keyword}%`)
-        .order("created_at", { ascending: false })
-        .limit(5);
-
-      if (docsError) {
-        console.error("[Retrieve Handler] Docs search error:", docsError);
-      }
-
+      const docs = await searchDocuments(userId, lowerKeyword);
       if (docs && docs.length > 0) {
-        const reply = buildSmartReply(message, docs, "document");
-
-        const { data: signedUrlData, error: urlError } = await serverSupabase.storage
-          .from("documents")
-          .createSignedUrl(docs[0].file_path, 60 * 10);
-
-        if (urlError) {
-          console.error("[Retrieve Handler] Signed URL error:", urlError);
-        }
-
+        const first = docs[0];
+        const signedUrl = await createSignedUrl("documents", first.file_path);
         return Response.json({
           type: "file_card",
-          message: reply,
+          message: "📄 Found your document!",
           fileCard: {
-            id: docs[0].id,
-            fileName: docs[0].file_name,
-            description: docs[0].description,
-            fileType: docs[0].file_type,
-            filePath: docs[0].file_path,
-            signedUrl: signedUrlData?.signedUrl ?? null,
-            createdAt: docs[0].created_at,
+            id: first.id,
+            fileName: first.file_name,
+            description: first.description,
+            fileType: first.file_type,
+            filePath: first.file_path,
+            signedUrl,
+            createdAt: first.created_at,
           },
+          results: docs,
         });
       }
-    }
-
-    // ─── SEARCH IMAGES ────────────────────────────────────────
-    if (lookingForImage) {
-      const { data: images, error: imagesError } = await serverSupabase
-        .from("images")
-        .select("*")
-        .eq("user_id", userId)
-        .ilike("description", `%${keyword}%`)
-        .order("created_at", { ascending: false })
-        .limit(5);
-
-      if (imagesError) {
-        console.error("[Retrieve Handler] Images search error:", imagesError);
-      }
-
-      if (images && images.length > 0) {
-        const reply = buildSmartReply(message, images, "image");
-
-        const { data: signedUrlData, error: urlError } = await serverSupabase.storage
-          .from("images")
-          .createSignedUrl(images[0].file_path, 60 * 10);
-
-        if (urlError) {
-          console.error("[Retrieve Handler] Image signed URL error:", urlError);
-        }
-
-        return Response.json({
-          type: "file_card",
-          message: reply,
-          fileCard: {
-            id: images[0].id,
-            fileName: images[0].file_name,
-            description: images[0].description,
-            fileType: "image",
-            filePath: images[0].file_path,
-            signedUrl: signedUrlData?.signedUrl ?? null,
-            createdAt: images[0].created_at,
-          },
-        });
-      }
-    }
-
-    // ─── SEARCH NOTES (LOAD MORE, RANK IN APP) ────────────────
-    // Important fix:
-    // fetch candidate rows first, then rank exact DB matches before returning.
-    const { data: notes, error: notesError } = await serverSupabase
-      .from("notes")
-      .select("*")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(150);
-
-    if (notesError) {
-      console.error("[Retrieve Handler] Notes search error:", notesError);
-      return Response.json(
-        {
-          type: "system",
-          message: "❌ Failed to search your notes. Please try again.",
-        },
-        { status: 500 }
-      );
-    }
-
-    const noteRows = (notes ?? []) as NoteRow[];
-
-    const ranked = noteRows
-      .map((note) => ({
-        note,
-        score: scoreNote(note, keyword, allPhones),
-      }))
-      .filter((item) => item.score > 0)
-      .sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score;
-
-        const aTime = a.note.created_at ? new Date(a.note.created_at).getTime() : 0;
-        const bTime = b.note.created_at ? new Date(b.note.created_at).getTime() : 0;
-        return bTime - aTime;
-      });
-
-    const matchedNotes = ranked.map((item) => item.note);
-
-    if (matchedNotes.length > 0) {
-      // Exact/best match check:
-      const best = ranked[0];
-      const second = ranked[1];
-
-      // If best is clearly stronger, return one.
-      if (!second || best.score >= second.score + 200) {
-        const reply = buildSmartReply(message, [best.note], "note");
-        return Response.json({
-          type: "retrieve_result",
-          message: reply,
-          note: best.note,
-          matches: 1,
-        });
-      }
-
-      // If several close matches exist, return multiple so user can choose.
-      return Response.json({
-        type: "retrieve_multiple",
-        message: buildMultipleNotesMessage(keyword, matchedNotes),
-        notes: matchedNotes.slice(0, 5).map((note) => ({
-          id: note.id,
-          title: note.title,
-          content: note.content,
-          category: note.category,
-          created_at: note.created_at,
-        })),
-        matches: matchedNotes.length,
-      });
-    }
-
-    // ─── SHOW RECENT NOTES AS FALLBACK ────────────────────────
-    const recentNotes = noteRows.slice(0, 3);
-
-    if (recentNotes.length > 0) {
       return Response.json({
         type: "not_found",
-        message: `I couldn't find "${keyword}" exactly in your current database. Here are your recent saves:\n\n${recentNotes
-          .map((n, i) => `${i + 1}. ${safeString(n.content).slice(0, 80)}`)
-          .join("\n")}`,
+        message: `📄 No documents found matching *"${lowerKeyword}"*.`,
       });
     }
 
-    // ─── NOTHING SAVED YET ────────────────────────────────────
+    // ─── IMAGES ───────────────────────────────────────────
+    if (lookingForImage) {
+      const images = await searchImages(userId, lowerKeyword);
+      if (images && images.length > 0) {
+        const first = images[0];
+        const signedUrl = await createSignedUrl("images", first.file_path);
+        return Response.json({
+          type: "file_card",
+          message: "🖼️ Found your image!",
+          fileCard: {
+            id: first.id,
+            fileName: first.file_name,
+            description: first.description,
+            fileType: "image",
+            filePath: first.file_path,
+            signedUrl,
+            createdAt: first.created_at,
+          },
+          results: images,
+        });
+      }
+      return Response.json({
+        type: "not_found",
+        message: `🖼️ No images found matching *"${lowerKeyword}"*.`,
+      });
+    }
+
+    // ─── NOTES: phone → FTS → keyword fallback ────────────
+    let collectedNotes: NoteRow[] = [];
+
+    if (phoneVariants.length) {
+      const phoneResults = await searchNotesByPhones(userId, phoneVariants);
+      if (phoneResults?.length) collectedNotes = [...phoneResults];
+    }
+
+    if (!collectedNotes.length && lowerKeyword) {
+      const ftsResults = await searchNotesByFts(userId, lowerKeyword);
+      if (ftsResults?.length) collectedNotes = [...ftsResults];
+    }
+
+    if (!collectedNotes.length && lowerKeyword) {
+      const fallbackResults = await searchNotesByKeywords(userId, lowerKeyword);
+      if (fallbackResults?.length) collectedNotes = [...fallbackResults];
+    }
+
+    const notes = dedupeNotes(collectedNotes).slice(0, 5);
+
+    if (notes.length === 1) {
+      const reply = buildSmartReply(cleanMessage, notes, "note");
+      return Response.json({
+        type: "retrieve_result",
+        message: reply,
+        note: notes[0],
+        matches: 1,
+      });
+    }
+
+    if (notes.length > 1) {
+      return Response.json({
+        type: "retrieve_multiple",
+        message: `Found ${notes.length} matches for *"${lowerKeyword}"*:\n\n${notes.map(summarizeNote).join("\n")}`,
+        notes,
+        matches: notes.length,
+      });
+    }
+
+    // ─── NOTHING FOUND — show recent notes ────────────────
+    const recentNotes = await fetchRecentNotes(userId);
+    if (recentNotes?.length) {
+      return Response.json({
+        type: "not_found",
+        message: `Nothing found for *"${lowerKeyword}"*.\n\nYour recent saves:\n\n${recentNotes.map(summarizeNote).join("\n")}`,
+        recentNotes,
+      });
+    }
+
     return Response.json({
       type: "not_found",
-      message: `I couldn't find anything matching "${keyword}". Try saving first by saying 'save my [your info]'`,
+      message: `Nothing saved yet matching *"${lowerKeyword}"*.\n\nTry: *"Save John number 08031234567"*`,
     });
+
   } catch (error) {
     console.error("[Retrieve Handler] Unexpected error:", error);
     return Response.json(

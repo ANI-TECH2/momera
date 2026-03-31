@@ -3,9 +3,6 @@ import { handleSave } from "@/server/handlers/save";
 import { handleRetrieve } from "@/server/handlers/retrieve";
 import { serverSupabase } from "@/server/supabase";
 
-// If you still want to keep your lib constant, you can import it instead.
-// import { INTENT_THRESHOLD } from "@/lib/constants";
-
 const INTENT_THRESHOLD = 0.62;
 const FAST_INTENT_SCORE = 0.99;
 
@@ -17,7 +14,7 @@ type AppIntent =
   | "intent.help"
   | "intent.none";
 
-type ExtractedEntity = {
+export type ExtractedEntity = {
   entity: string;
   sourceText: string;
   value?: string;
@@ -44,13 +41,8 @@ async function getUserIdFromRequest(req: Request): Promise<string | null> {
   try {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) return null;
-
     const token = authHeader.slice(7);
-    const {
-      data: { user },
-      error,
-    } = await serverSupabase.auth.getUser(token);
-
+    const { data: { user }, error } = await serverSupabase.auth.getUser(token);
     if (error || !user) return null;
     return user.id;
   } catch {
@@ -59,13 +51,13 @@ async function getUserIdFromRequest(req: Request): Promise<string | null> {
 }
 
 // ───────────────────────────────────────────────────────────────
-// NORMALIZATION HELPERS
+// NORMALIZATION
 // ───────────────────────────────────────────────────────────────
 function normalizeMessage(input: string): string {
   return input
     .replace(/\s+/g, " ")
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'")
+    .replace(/[""]/g, '"')
+    .replace(/['']/g, "'")
     .trim();
 }
 
@@ -76,7 +68,6 @@ function normalizeLoose(input: string): string {
 function uniqueEntities(entities: ExtractedEntity[]): ExtractedEntity[] {
   const seen = new Set<string>();
   const out: ExtractedEntity[] = [];
-
   for (const entity of entities) {
     const key = `${entity.entity}:${entity.sourceText.toLowerCase()}`;
     if (!seen.has(key)) {
@@ -84,7 +75,6 @@ function uniqueEntities(entities: ExtractedEntity[]): ExtractedEntity[] {
       out.push(entity);
     }
   }
-
   return out;
 }
 
@@ -111,13 +101,8 @@ function detectIntentFast(message: string): AppIntent | null {
   ];
 
   const SAVE_BLOCKLIST = [
-    "save me",
-    "save us",
-    "save him",
-    "save her",
-    "save them",
-    "save money",
-    "savings",
+    "save me", "save us", "save him",
+    "save her", "save them", "save money", "savings",
   ];
 
   if (
@@ -131,7 +116,6 @@ function detectIntentFast(message: string): AppIntent | null {
     /^show\s+my\s+.+/i,
     /^show\s+me\s+my\s+.+/i,
     /^find\s+my\s+.+/i,
-    /^find\s+.+/i,
     /^get\s+my\s+.+/i,
     /^retrieve\s+.+/i,
     /^search\s+(?:for\s+)?.+/i,
@@ -141,6 +125,8 @@ function detectIntentFast(message: string): AppIntent | null {
     /^do\s+i\s+have\s+.+/i,
     /^look\s+up\s+.+/i,
   ];
+
+  // ✅ Removed bare /^find\s+.+/i — too loose, caused false retrieves
 
   if (RETRIEVE_TRIGGERS.some((pattern) => pattern.test(lower))) {
     return "intent.retrieve";
@@ -156,19 +142,13 @@ function detectIntentFast(message: string): AppIntent | null {
     return "intent.delete";
   }
 
-  const GREET_TRIGGERS = [
-    "hi",
-    "hello",
-    "hey",
-    "hiya",
-    "howdy",
-    "good morning",
-    "good afternoon",
-    "good evening",
+  const GREET_EXACT = [
+    "hi", "hello", "hey", "hiya", "howdy",
+    "good morning", "good afternoon", "good evening",
   ];
 
   if (
-    GREET_TRIGGERS.includes(lower) ||
+    GREET_EXACT.includes(lower) ||
     /^(hi|hey|hello)\s*[!,.]?\s*$/i.test(lower)
   ) {
     return "intent.greet";
@@ -191,8 +171,7 @@ function detectIntentFast(message: string): AppIntent | null {
 }
 
 // ───────────────────────────────────────────────────────────────
-// MANUAL ENTITY EXTRACTION
-// Helps even when NLP misses some details
+// ENTITY EXTRACTION
 // ───────────────────────────────────────────────────────────────
 function extractEntitiesHeuristic(message: string): ExtractedEntity[] {
   const entities: ExtractedEntity[] = [];
@@ -200,169 +179,100 @@ function extractEntitiesHeuristic(message: string): ExtractedEntity[] {
 
   const pushMatch = (entity: string, match: string) => {
     if (!match) return;
-    entities.push({
-      entity,
-      sourceText: match.trim(),
-      value: match.trim(),
-      accuracy: 0.8,
-    });
+    entities.push({ entity, sourceText: match.trim(), value: match.trim(), accuracy: 0.8 });
   };
 
   const phoneMatches = text.match(/(?:\+234|234|0)?[7-9][0-1]\d{8}\b/g) ?? [];
   for (const match of phoneMatches) pushMatch("phone", match);
 
-  const emailMatches =
-    text.match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi) ?? [];
+  const emailMatches = text.match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi) ?? [];
   for (const match of emailMatches) pushMatch("email", match);
 
-  const moneyMatches =
-    text.match(/(?:₦|\$|usd|ngn)?\s?\d{1,3}(?:,\d{3})*(?:\.\d+)?/gi) ?? [];
+  const moneyMatches = text.match(/(?:₦|\$|usd|ngn)?\s?\d{1,3}(?:,\d{3})*(?:\.\d+)?/gi) ?? [];
   for (const match of moneyMatches) {
     if (/(₦|\$|usd|ngn)/i.test(match)) pushMatch("money", match);
   }
 
-  const dateMatches =
-    text.match(
-      /\b(?:today|tomorrow|yesterday|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})\b/gi
-    ) ?? [];
+  const dateMatches = text.match(
+    /\b(?:today|tomorrow|yesterday|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})\b/gi
+  ) ?? [];
   for (const match of dateMatches) pushMatch("date_like", match);
 
-  const placeMatches =
-    text.match(
-      /\b(?:port harcourt|portharcourt|lagos|abuja|ph|rivers state)\b/gi
-    ) ?? [];
+  const placeMatches = text.match(
+    /\b(?:port harcourt|portharcourt|lagos|abuja|ph|rivers state)\b/gi
+  ) ?? [];
   for (const match of placeMatches) pushMatch("place", match);
 
   const keywords = [
-    "password",
-    "pin",
-    "passcode",
-    "otp",
-    "email",
-    "address",
-    "contact",
-    "number",
-    "rent",
-    "meeting",
-    "note",
+    "password", "pin", "passcode", "otp", "email",
+    "address", "contact", "number", "rent", "meeting", "note",
   ];
-
   for (const keyword of keywords) {
-    if (new RegExp(`\\b${keyword}\\b`, "i").test(text)) {
-      pushMatch("keyword", keyword);
-    }
+    if (new RegExp(`\\b${keyword}\\b`, "i").test(text)) pushMatch("keyword", keyword);
   }
 
-  // crude name-like extraction: "john", "victor", "mary", etc.
-  // Avoid extracting the command verbs themselves.
   const stopWords = new Set([
-    "save",
-    "remember",
-    "store",
-    "keep",
-    "find",
-    "show",
-    "get",
-    "retrieve",
-    "search",
-    "delete",
-    "remove",
-    "clear",
-    "help",
-    "what",
-    "my",
-    "this",
-    "that",
-    "from",
-    "about",
-    "note",
-    "password",
-    "number",
-    "contact",
+    "save", "remember", "store", "keep", "find", "show", "get",
+    "retrieve", "search", "delete", "remove", "clear", "help",
+    "what", "my", "this", "that", "from", "about", "note",
+    "password", "number", "contact",
   ]);
 
   const wordMatches = text.match(/\b[A-Za-z][a-z]{2,}\b/g) ?? [];
   for (const word of wordMatches) {
-    const lower = word.toLowerCase();
-    if (!stopWords.has(lower)) {
-      pushMatch("name_like", word);
-    }
+    if (!stopWords.has(word.toLowerCase())) pushMatch("name_like", word);
   }
 
   return uniqueEntities(entities);
 }
 
-// ───────────────────────────────────────────────────────────────
-// NLP ENTITY NORMALIZATION
-// ───────────────────────────────────────────────────────────────
 function normalizeNlpEntities(rawEntities: any[]): ExtractedEntity[] {
   if (!Array.isArray(rawEntities)) return [];
-
-  const normalized: ExtractedEntity[] = rawEntities
-    .map((item) => {
-      const entity = safeText(item?.entity || item?.type);
-      const sourceText = safeText(item?.sourceText || item?.utteranceText || item?.option);
-      const value =
-        typeof item?.resolution?.value === "string"
-          ? item.resolution.value
-          : typeof item?.option === "string"
-          ? item.option
-          : sourceText;
-
-      if (!entity || !sourceText) return null;
-
-      return {
-        entity,
-        sourceText,
-        value,
-        accuracy:
-          typeof item?.accuracy === "number"
-            ? item.accuracy
-            : typeof item?.score === "number"
-            ? item.score
-            : 0.85,
-      };
-    })
-    .filter(Boolean) as ExtractedEntity[];
-
-  return uniqueEntities(normalized);
+  return uniqueEntities(
+    rawEntities
+      .map((item) => {
+        const entity = safeText(item?.entity || item?.type);
+        const sourceText = safeText(item?.sourceText || item?.utteranceText || item?.option);
+        const value =
+          typeof item?.resolution?.value === "string"
+            ? item.resolution.value
+            : typeof item?.option === "string"
+            ? item.option
+            : sourceText;
+        if (!entity || !sourceText) return null;
+        return {
+          entity, sourceText, value,
+          accuracy: typeof item?.accuracy === "number" ? item.accuracy
+            : typeof item?.score === "number" ? item.score : 0.85,
+        };
+      })
+      .filter(Boolean) as ExtractedEntity[]
+  );
 }
 
-// ───────────────────────────────────────────────────────────────
-// HEURISTIC INTENT INFERENCE
-// Lets short natural queries still work better
-// ───────────────────────────────────────────────────────────────
 function inferIntentFromEntities(message: string, entities: ExtractedEntity[]): AppIntent | null {
   const lower = normalizeLoose(message);
 
-  const hasStoredThing =
+  const hasContent =
     entities.some((e) =>
-      ["phone", "email", "money", "date_like", "place", "keyword", "name_like"].includes(e.entity)
-    ) || lower.split(/\s+/).length >= 2;
+      ["phone", "email", "money", "date_like", "place", "keyword"].includes(e.entity)
+    );
 
-  if (!hasStoredThing) return null;
+  // ✅ Only infer from strong entities — not name_like alone (too loose)
+  if (!hasContent) return null;
 
   if (/\b(delete|remove|clear)\b/i.test(lower)) return "intent.delete";
-  if (/\b(show|find|get|retrieve|search|lookup|look up|where|what)\b/i.test(lower)) {
-    return "intent.retrieve";
-  }
-  if (/\b(save|remember|store|keep|note)\b/i.test(lower)) {
-    return "intent.save";
-  }
-
-  // For short content-heavy utterances, default to retrieve instead of bad save.
-  // Example: "john port harcourt", "my password", "that rent note"
-  if (entities.length > 0) return "intent.retrieve";
+  if (/\b(show|find|get|retrieve|search|lookup|look up|where|what)\b/i.test(lower)) return "intent.retrieve";
+  if (/\b(save|remember|store|keep|note)\b/i.test(lower)) return "intent.save";
 
   return null;
 }
 
 // ───────────────────────────────────────────────────────────────
-// GUIDANCE
+// GUIDANCE MESSAGES
 // ───────────────────────────────────────────────────────────────
 function getGuidanceMessage(message: string): string {
   const quoted = message ? `: *"${message}"*` : "";
-
   return `I'm not sure what you'd like to do${quoted}
 
 Here are examples I understand well:
@@ -374,7 +284,7 @@ Here are examples I understand well:
 
 🔍 **Find something**
 → *Show my notes*
-→ *Find John from Port Harcourt*
+→ *Find my password*
 → *What is my password?*
 
 🗑️ **Delete something**
@@ -388,16 +298,15 @@ function buildGreetingMessage(): string {
   return `Hello! 👋 I'm Momera, your personal memory assistant.
 
 You can ask me to:
-- save notes
-- find saved info
-- delete notes
+- 💾 Save notes: *"Save my password is 1234"*
+- 🔍 Find saved info: *"Show my notes"*
+- 🗑️ Delete notes: *"Delete my password note"*
 
-Type *help* to see examples.`;
+Type *help* to see more examples.`;
 }
 
 // ───────────────────────────────────────────────────────────────
-// OPTIONAL: save latest query context
-// lets future follow-up become smarter
+// CONTEXT SAVING
 // ───────────────────────────────────────────────────────────────
 async function saveLastQueryContext(
   userId: string,
@@ -426,82 +335,39 @@ async function saveLastQueryContext(
 // ───────────────────────────────────────────────────────────────
 async function detectIntent(message: string): Promise<DetectionResult> {
   const cleanMessage = normalizeMessage(message);
-
-  // 1) Fast rules first
   const fastIntent = detectIntentFast(cleanMessage);
   const heuristicEntities = extractEntitiesHeuristic(cleanMessage);
 
   if (fastIntent) {
-    return {
-      intent: fastIntent,
-      score: FAST_INTENT_SCORE,
-      entities: heuristicEntities,
-      source: "fast",
-    };
+    return { intent: fastIntent, score: FAST_INTENT_SCORE, entities: heuristicEntities, source: "fast" };
   }
 
-  // 2) NLP fallback
   try {
     const nlp = await getNlp();
     const result = await nlp.process("en", cleanMessage);
 
-    const nlpIntent =
-      typeof result.intent === "string" ? (result.intent as AppIntent) : null;
-    const nlpScore =
-      typeof result.score === "number" ? result.score : 0;
-
+    const nlpIntent = typeof result.intent === "string" ? (result.intent as AppIntent) : null;
+    const nlpScore = typeof result.score === "number" ? result.score : 0;
     const nlpEntities = normalizeNlpEntities(Array.isArray(result.entities) ? result.entities : []);
     const mergedEntities = uniqueEntities([...nlpEntities, ...heuristicEntities]);
 
-    if (
-      nlpIntent &&
-      nlpIntent !== "intent.none" &&
-      nlpScore >= INTENT_THRESHOLD
-    ) {
-      return {
-        intent: nlpIntent,
-        score: nlpScore,
-        entities: mergedEntities,
-        source: "nlp",
-      };
+    if (nlpIntent && nlpIntent !== "intent.none" && nlpScore >= INTENT_THRESHOLD) {
+      return { intent: nlpIntent, score: nlpScore, entities: mergedEntities, source: "nlp" };
     }
 
-    // 3) Heuristic fallback using extracted entities
     const heuristicIntent = inferIntentFromEntities(cleanMessage, mergedEntities);
     if (heuristicIntent) {
-      return {
-        intent: heuristicIntent,
-        score: 0.58,
-        entities: mergedEntities,
-        source: "heuristic",
-      };
+      return { intent: heuristicIntent, score: 0.58, entities: mergedEntities, source: "heuristic" };
     }
 
-    return {
-      intent: null,
-      score: nlpScore,
-      entities: mergedEntities,
-      source: "unknown",
-    };
+    return { intent: null, score: nlpScore, entities: mergedEntities, source: "unknown" };
   } catch (error) {
     console.warn("[Chat API] NLP detection failed:", error);
-
     const heuristicIntent = inferIntentFromEntities(cleanMessage, heuristicEntities);
     if (heuristicIntent) {
-      return {
-        intent: heuristicIntent,
-        score: 0.58,
-        entities: heuristicEntities,
-        source: "heuristic",
-      };
+      return { intent: heuristicIntent, score: 0.58, entities: heuristicEntities, source: "heuristic" };
     }
-
-    return {
-      intent: null,
-      score: 0,
-      entities: heuristicEntities,
-      source: "unknown",
-    };
+    return { intent: null, score: 0, entities: heuristicEntities, source: "unknown" };
   }
 }
 
@@ -514,10 +380,7 @@ export async function POST(req: Request) {
     const message = normalizeMessage(safeText(body?.message));
 
     if (!message) {
-      return Response.json(
-        { type: "system", message: "Missing message" },
-        { status: 400 }
-      );
+      return Response.json({ type: "system", message: "Missing message" }, { status: 400 });
     }
 
     const userId = await getUserIdFromRequest(req);
@@ -540,94 +403,51 @@ export async function POST(req: Request) {
     let responseData: ChatResponsePayload;
 
     if (!detection.intent) {
-      responseData = {
-        type: "assistant",
-        message: getGuidanceMessage(message),
-      };
-
-      return Response.json(responseData);
+      return Response.json({ type: "assistant", message: getGuidanceMessage(message) });
     }
 
     await saveLastQueryContext(userId, message, detection.intent, detection.entities);
 
+    // ✅ KEY FIX: Pass message string + entities directly — NOT a Request object
     if (detection.intent === "intent.save") {
-      const saveBody = {
-        message,
-        entities: detection.entities,
-        intentScore: detection.score,
-        intentSource: detection.source,
-      };
-
-      const saveReq = new Request(req.url, {
-        method: "POST",
-        headers: req.headers,
-        body: JSON.stringify(saveBody),
-      });
-
-      const res = await handleSave(saveReq as any, userId);
+      const res = await handleSave(message, userId, detection.entities);
       responseData = await res.json();
-
       return Response.json(responseData);
     }
 
     if (detection.intent === "intent.retrieve") {
-      const retrieveBody = {
-        message,
-        entities: detection.entities,
-        intentScore: detection.score,
-        intentSource: detection.source,
-      };
-
-      const retrieveReq = new Request(req.url, {
-        method: "POST",
-        headers: req.headers,
-        body: JSON.stringify(retrieveBody),
-      });
-
-      const res = await handleRetrieve(retrieveReq as any, userId);
+      const res = await handleRetrieve(message, userId, detection.entities);
       responseData = await res.json();
-
       return Response.json(responseData);
     }
 
     if (detection.intent === "intent.delete") {
-      responseData = {
+      return Response.json({
         type: "assistant",
-        message:
-          '🗑️ To delete something, please say exactly what to remove.\n\nExample: *"Delete my note about passwords"*',
+        message: '🗑️ To delete something, please say exactly what to remove.\n\nExample: *"Delete my note about passwords"*',
         intent: detection.intent,
         entities: detection.entities,
-      };
-
-      return Response.json(responseData);
+      });
     }
 
     if (detection.intent === "intent.greet") {
-      responseData = {
+      return Response.json({
         type: "assistant",
         message: buildGreetingMessage(),
         intent: detection.intent,
-      };
-
-      return Response.json(responseData);
+      });
     }
 
     if (detection.intent === "intent.help") {
-      responseData = {
+      return Response.json({
         type: "assistant",
         message: getGuidanceMessage(""),
         intent: detection.intent,
-      };
-
-      return Response.json(responseData);
+      });
     }
 
-    responseData = {
-      type: "assistant",
-      message: getGuidanceMessage(message),
-    };
+    return Response.json({ type: "assistant", message: getGuidanceMessage(message) });
 
-    return Response.json(responseData);
   } catch (error) {
     console.error("[Chat API] Error:", error);
     return Response.json(
@@ -662,9 +482,6 @@ export async function GET(req: Request) {
     return Response.json({ messages: data ?? [] });
   } catch (error) {
     console.error("[Chat GET] Error:", error);
-    return Response.json(
-      { error: "Could not load chat history" },
-      { status: 500 }
-    );
+    return Response.json({ error: "Could not load chat history" }, { status: 500 });
   }
 }

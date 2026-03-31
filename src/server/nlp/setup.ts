@@ -2,128 +2,268 @@ import { NlpManager } from "node-nlp";
 
 let managerPromise: Promise<NlpManager> | null = null;
 
+// ─── RULES ────────────────────────────────────────────────────
+// Rule 1: Never guess — if score < 0.75 treat as intent.none
+// Rule 2: All intents must have 10+ training examples
+// Rule 3: Unknown commands tell user what to do
+// Rule 4: Fast keyword detection runs BEFORE NLP
+// Rule 5: Entities extracted and attached to result
+
 export async function getNlp(): Promise<NlpManager> {
   if (!managerPromise) {
     managerPromise = (async () => {
       const manager = new NlpManager({
         languages: ["en"],
         forceNER: true,
+        nlu: { useNoneFeature: true }, // ✅ teaches model what "none" looks like
+        autoSave: false,
       });
 
-      // ────────────────────────────────────────────────────────────
-      // INTENT TRAINING
-      // ────────────────────────────────────────────────────────────
+      // ────────────────────────────────────────────────────────
+      // INTENT: SAVE
+      // ────────────────────────────────────────────────────────
+      const saveDocs = [
+        "save this",
+        "save my",
+        "save these",
+        "save john number 08034332394",
+        "save my classmate john 08034332394",
+        "save my password is 1234",
+        "save my email is test@gmail.com",
+        "save victor address port harcourt",
+        "save my bank account 1234567890",
+        "save my pin 4321",
+        "save my notes for today",
+        "save my friend mike number",
+        "remember this",
+        "remember my password",
+        "remember my classmate",
+        "remember john number 08034332394",
+        "remember my pin is 1234",
+        "store this for me",
+        "store my number",
+        "store my password",
+        "store my address",
+        "keep this safe",
+        "keep my number",
+        "keep my password",
+        "note this down",
+        "note down my number",
+        "note my classmate details",
+        "i want to save my number",
+        "please save this for me",
+        "can you save my password",
+        "add this to my memory",
+        "record my number",
+        "record this information",
+      ];
+      saveDocs.forEach(doc => manager.addDocument("en", doc, "intent.save"));
 
-      // SAVE
-      manager.addDocument("en", "save this %data%", "intent.save");
-      manager.addDocument("en", "save my %data%", "intent.save");
-      manager.addDocument("en", "remember this %data%", "intent.save");
-      manager.addDocument("en", "remember my %data%", "intent.save");
-      manager.addDocument("en", "store this %data%", "intent.save");
-      manager.addDocument("en", "store my %data%", "intent.save");
-      manager.addDocument("en", "keep this %data%", "intent.save");
-      manager.addDocument("en", "keep my %data%", "intent.save");
-      manager.addDocument("en", "note this %data%", "intent.save");
-      manager.addDocument("en", "note down %data%", "intent.save");
-      manager.addDocument("en", "save john number 0803", "intent.save");
-      manager.addDocument("en", "remember my password is 1234", "intent.save");
-      manager.addDocument("en", "store victor address in port harcourt", "intent.save");
+      // ────────────────────────────────────────────────────────
+      // INTENT: RETRIEVE
+      // ────────────────────────────────────────────────────────
+      const retrieveDocs = [
+        "find my number",
+        "find my password",
+        "find john",
+        "find my classmate john",
+        "find that note about rent",
+        "find my email",
+        "show my number",
+        "show my password",
+        "show me my saved notes",
+        "show my classmate",
+        "show all my contacts",
+        "show my bank details",
+        "get my number",
+        "get my password",
+        "get my saved info",
+        "retrieve my number",
+        "retrieve my notes",
+        "search for john",
+        "search my notes",
+        "look up my number",
+        "look up john",
+        "what is my password",
+        "what is my pin",
+        "what is my number",
+        "what was my email",
+        "what did i save about john",
+        "what did i save about rent",
+        "do i have any notes",
+        "do i have johns number",
+        "give me my saved data",
+        "check my saved notes",
+        "where is my password",
+        "i need my number",
+        "can you find my classmate",
+      ];
+      retrieveDocs.forEach(doc => manager.addDocument("en", doc, "intent.retrieve"));
 
-      // RETRIEVE
-      manager.addDocument("en", "find my %data%", "intent.retrieve");
-      manager.addDocument("en", "find %data%", "intent.retrieve");
-      manager.addDocument("en", "show my %data%", "intent.retrieve");
-      manager.addDocument("en", "show me my %data%", "intent.retrieve");
-      manager.addDocument("en", "get my %data%", "intent.retrieve");
-      manager.addDocument("en", "retrieve my %data%", "intent.retrieve");
-      manager.addDocument("en", "search for %data%", "intent.retrieve");
-      manager.addDocument("en", "look up %data%", "intent.retrieve");
-      manager.addDocument("en", "what is my %data%", "intent.retrieve");
-      manager.addDocument("en", "what was my %data%", "intent.retrieve");
-      manager.addDocument("en", "what did i save about %data%", "intent.retrieve");
-      manager.addDocument("en", "do i have %data%", "intent.retrieve");
-      manager.addDocument("en", "find john from port harcourt", "intent.retrieve");
-      manager.addDocument("en", "show my password", "intent.retrieve");
-      manager.addDocument("en", "find that note about rent", "intent.retrieve");
+      // ────────────────────────────────────────────────────────
+      // INTENT: DELETE
+      // ────────────────────────────────────────────────────────
+      const deleteDocs = [
+        "delete my number",
+        "delete my password",
+        "delete that note",
+        "delete my classmate john",
+        "remove my number",
+        "remove my saved note",
+        "remove that password",
+        "clear my number",
+        "clear my notes",
+        "erase my number",
+        "erase my password",
+        "i want to delete my note",
+        "please remove this",
+      ];
+      deleteDocs.forEach(doc => manager.addDocument("en", doc, "intent.delete"));
 
-      // DELETE
-      manager.addDocument("en", "delete my %data%", "intent.delete");
-      manager.addDocument("en", "remove my %data%", "intent.delete");
-      manager.addDocument("en", "clear my %data%", "intent.delete");
-      manager.addDocument("en", "delete that note about %data%", "intent.delete");
+      // ────────────────────────────────────────────────────────
+      // INTENT: GREET
+      // ────────────────────────────────────────────────────────
+      const greetDocs = [
+        "hi",
+        "hello",
+        "hey",
+        "hey there",
+        "hi there",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "good night",
+        "howdy",
+        "what is up",
+        "how are you",
+        "how are you doing",
+        "how is it going",
+      ];
+      greetDocs.forEach(doc => manager.addDocument("en", doc, "intent.greet"));
 
-      // GREET
-      manager.addDocument("en", "hi", "intent.greet");
-      manager.addDocument("en", "hello", "intent.greet");
-      manager.addDocument("en", "hey", "intent.greet");
-      manager.addDocument("en", "good morning", "intent.greet");
-      manager.addDocument("en", "good afternoon", "intent.greet");
-      manager.addDocument("en", "good evening", "intent.greet");
+      // ────────────────────────────────────────────────────────
+      // INTENT: HELP
+      // ────────────────────────────────────────────────────────
+      const helpDocs = [
+        "help",
+        "help me",
+        "i need help",
+        "what can you do",
+        "what are you",
+        "how do i use this",
+        "how does this work",
+        "how do i save",
+        "how do i find my notes",
+        "what commands do you support",
+        "what are your features",
+        "show me how to use this",
+        "guide me",
+        "tutorial",
+        "instructions",
+      ];
+      helpDocs.forEach(doc => manager.addDocument("en", doc, "intent.help"));
 
-      // HELP
-      manager.addDocument("en", "help", "intent.help");
-      manager.addDocument("en", "what can you do", "intent.help");
-      manager.addDocument("en", "how do i use this", "intent.help");
-      manager.addDocument("en", "how does this work", "intent.help");
-      manager.addDocument("en", "what are your features", "intent.help");
-      manager.addDocument("en", "what commands do you support", "intent.help");
+      // ────────────────────────────────────────────────────────
+      // INTENT: NONE — teaches model what NOT to classify
+      // ────────────────────────────────────────────────────────
+      const noneDocs = [
+        "okay",
+        "ok",
+        "alright",
+        "hmm",
+        "nice",
+        "cool",
+        "sure",
+        "yes",
+        "no",
+        "maybe",
+        "thanks",
+        "thank you",
+        "bye",
+        "goodbye",
+        "see you",
+        "lol",
+        "haha",
+        "wow",
+        "really",
+        "interesting",
+        "i see",
+        "got it",
+        "understood",
+        "makes sense",
+        "not sure",
+        "i dont know",
+        "whatever",
+        "never mind",
+        "forget it",
+        "skip",
+        "ignore that",
+        "testing",
+        "test",
+        "hello world",
+        "asdfghjkl",
+        "what time is it",
+        "tell me a joke",
+        "what is the weather",
+        "calculate 2 plus 2",
+        "translate this",
+        "who are you",
+        "are you a robot",
+        "what is your name",
+      ];
+      noneDocs.forEach(doc => manager.addDocument("en", doc, "intent.none"));
 
-      // FALLBACK / NONE
-      manager.addDocument("en", "okay", "intent.none");
-      manager.addDocument("en", "alright", "intent.none");
-      manager.addDocument("en", "hmm", "intent.none");
-      manager.addDocument("en", "nice", "intent.none");
-
-      // ────────────────────────────────────────────────────────────
-      // CUSTOM REGEX ENTITIES
-      // ────────────────────────────────────────────────────────────
-
+      // ────────────────────────────────────────────────────────
+      // ENTITIES
+      // ────────────────────────────────────────────────────────
       manager.addRegexEntity(
-        "phone",
-        "en",
+        "phone", "en",
         /(?:\+234|234|0)?[7-9][0-1]\d{8}\b/g
       );
 
       manager.addRegexEntity(
-        "email",
-        "en",
+        "email", "en",
         /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi
       );
 
       manager.addRegexEntity(
-        "money",
-        "en",
+        "money", "en",
         /(?:₦|\$|usd|ngn)?\s?\d{1,3}(?:,\d{3})*(?:\.\d+)?/gi
       );
 
       manager.addRegexEntity(
-        "date_like",
-        "en",
+        "date_like", "en",
         /\b(?:today|tomorrow|yesterday|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})\b/gi
       );
 
       manager.addRegexEntity(
-        "password_like",
-        "en",
-        /\b(?:password|pin|passcode|otp)\b/gi
+        "password_like", "en",
+        /\b(?:password|pin|passcode|otp|secret)\b/gi
       );
 
-      // Small enum examples for places you expect often.
-      manager.addNamedEntityText("place", "port harcourt", ["en"], [
-        "port harcourt",
-        "ph",
-        "portharcourt",
-      ]);
-
+      // Places
+      manager.addNamedEntityText("place", "port harcourt", ["en"], ["port harcourt", "ph", "portharcourt"]);
       manager.addNamedEntityText("place", "lagos", ["en"], ["lagos"]);
       manager.addNamedEntityText("place", "abuja", ["en"], ["abuja"]);
+      manager.addNamedEntityText("place", "kano", ["en"], ["kano"]);
 
-      // Optional answers
-      manager.addAnswer("en", "intent.greet", "Hello! 👋");
-      manager.addAnswer("en", "intent.help", "Type help to see examples.");
+      // ────────────────────────────────────────────────────────
+      // ANSWERS
+      // ────────────────────────────────────────────────────────
+      manager.addAnswer("en", "intent.greet",
+        "Hello! 👋 How can I help you today?\n\n💾 Save: 'save my [info]'\n🔍 Find: 'show my [topic]'\n📄 Upload: tap the + button"
+      );
+
+      manager.addAnswer("en", "intent.help",
+        "Here's what I can do:\n\n💾 Save: 'save my classmate John 08034332394'\n🔍 Find: 'show my classmate John'\n📄 Upload: tap the + button\n🗑️ Delete: 'delete my note about John'"
+      );
+
+      // ✅ Rule: Tell user when command is not understood
+      manager.addAnswer("en", "intent.none",
+        "I didn't understand that. Try:\n\n💾 'save my [info]'\n🔍 'show my [topic]'\n📄 tap + to upload\n\nType 'help' to see all commands."
+      );
 
       await manager.train();
-      manager.save();
       return manager;
     })();
   }
