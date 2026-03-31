@@ -11,7 +11,7 @@ import {
   ActivityIndicator,
   StatusBar,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { useAuth } from "@/lib/auth";
 import { ChatBubble } from "@/components/chat/ChatBubble";
@@ -30,6 +30,7 @@ const WELCOME_MESSAGE: ChatMessage = {
 export default function ChatScreen() {
   const { user, session } = useAuth();
   const userId = user?.id;
+  const insets = useSafeAreaInsets();
 
   const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE]);
   const [input, setInput] = useState("");
@@ -119,25 +120,16 @@ export default function ChatScreen() {
     });
 
     try {
-      console.log("[Chat] Sending:", trimmedInput);
-      console.log("[Chat] Token:", session.access_token ? "✅" : "❌ missing");
-
-      const bodyString = JSON.stringify({ message: trimmedInput });
-
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.access_token}`,
         },
-        body: bodyString,
+        body: JSON.stringify({ message: trimmedInput }),
       });
 
-      console.log("[Chat] Status:", res.status);
-
       const data = await res.json();
-
-      console.log("[Chat] Response:", data);
 
       if (!res.ok) {
         throw new Error(data?.message || `Server error ${res.status}`);
@@ -177,7 +169,7 @@ export default function ChatScreen() {
   if (!userId) return null;
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top", "left", "right", "bottom"]}>
+    <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
       <StatusBar barStyle="light-content" backgroundColor={COLORS.background} />
 
       <View style={styles.header}>
@@ -192,70 +184,84 @@ export default function ChatScreen() {
           </View>
         </View>
 
-        <Pressable style={styles.uploadBtn} onPress={() => router.push("/upload")}>
+        <Pressable
+          style={styles.uploadBtn}
+          onPress={() => router.push("/upload")}
+        >
           <Text style={styles.uploadBtnText}>+</Text>
         </Pressable>
       </View>
 
       <KeyboardAvoidingView
-        style={styles.flex}
+        style={styles.keyboardRoot}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 8 : 0}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
       >
-        <FlatList
-          ref={flatListRef}
-          data={messages}
-          keyExtractor={(item, index) => item.id ?? `${item.createdAt}-${index}`}
-          renderItem={({ item }) => <ChatBubble message={item} />}
-          contentContainerStyle={styles.chatContent}
-          onContentSizeChange={() => scrollToBottom(false)}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        />
-
-        {loading && (
-          <View style={styles.typingRow}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>M</Text>
-            </View>
-
-            <View style={styles.typingBubble}>
-              <ActivityIndicator size="small" color={COLORS.primary} />
-              <Text style={styles.typingText}>Thinking...</Text>
-            </View>
-          </View>
-        )}
-
-        <View style={styles.inputBar}>
-          <TextInput
-            style={styles.input}
-            value={input}
-            onChangeText={setInput}
-            placeholder="Save or find something..."
-            placeholderTextColor={COLORS.textSecondary}
-            multiline
-            maxLength={1000}
-            returnKeyType="send"
-            blurOnSubmit={false}
-            onSubmitEditing={() => {
-              if (!loading && input.trim()) {
-                sendMessage();
-              }
-            }}
+        <View style={styles.content}>
+          <FlatList
+            ref={flatListRef}
+            data={messages}
+            keyExtractor={(item, index) => item.id ?? `${item.createdAt}-${index}`}
+            renderItem={({ item }) => <ChatBubble message={item} />}
+            style={styles.list}
+            contentContainerStyle={[
+              styles.chatContent,
+              { paddingBottom: loading ? 12 : 8 },
+            ]}
+            onContentSizeChange={() => scrollToBottom(false)}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
           />
 
-          <Pressable
+          {loading && (
+            <View style={styles.typingRow}>
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>M</Text>
+              </View>
+
+              <View style={styles.typingBubble}>
+                <ActivityIndicator size="small" color={COLORS.primary} />
+                <Text style={styles.typingText}>Thinking...</Text>
+              </View>
+            </View>
+          )}
+
+          <View
             style={[
-              styles.sendBtn,
-              (!input.trim() || loading) && styles.sendBtnDisabled,
+              styles.inputWrap,
+              { paddingBottom: Math.max(insets.bottom, 8) },
             ]}
-            onPress={sendMessage}
-            disabled={!input.trim() || loading}
           >
-            <Text style={styles.sendText}>
-              {loading ? "..." : "Send"}
-            </Text>
-          </Pressable>
+            <View style={styles.inputBar}>
+              <TextInput
+                style={styles.input}
+                value={input}
+                onChangeText={setInput}
+                placeholder="Save or find something..."
+                placeholderTextColor={COLORS.textSecondary}
+                multiline
+                maxLength={1000}
+                returnKeyType="send"
+                blurOnSubmit={false}
+                onSubmitEditing={() => {
+                  if (!loading && input.trim()) {
+                    sendMessage();
+                  }
+                }}
+              />
+
+              <Pressable
+                style={[
+                  styles.sendBtn,
+                  (!input.trim() || loading) && styles.sendBtnDisabled,
+                ]}
+                onPress={sendMessage}
+                disabled={!input.trim() || loading}
+              >
+                <Text style={styles.sendText}>{loading ? "..." : "Send"}</Text>
+              </Pressable>
+            </View>
+          </View>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -267,7 +273,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.background,
   },
-  flex: {
+  keyboardRoot: {
+    flex: 1,
+  },
+  content: {
     flex: 1,
   },
   header: {
@@ -322,16 +331,20 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: "300",
   },
+  list: {
+    flex: 1,
+  },
   chatContent: {
-    paddingVertical: 12,
-    paddingBottom: 8,
+    paddingTop: 12,
   },
   typingRow: {
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingTop: 6,
+    paddingBottom: 6,
     gap: 8,
+    backgroundColor: COLORS.background,
   },
   avatar: {
     width: 32,
@@ -361,15 +374,16 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     fontSize: 13,
   },
+  inputWrap: {
+    backgroundColor: COLORS.background,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+    paddingTop: 8,
+    paddingHorizontal: 12,
+  },
   inputBar: {
     flexDirection: "row",
     alignItems: "flex-end",
-    paddingHorizontal: 12,
-    paddingTop: 10,
-    paddingBottom: 12,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-    backgroundColor: COLORS.background,
     gap: 8,
   },
   input: {
@@ -377,18 +391,20 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.card,
     borderRadius: 22,
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingTop: 12,
+    paddingBottom: 12,
     color: COLORS.text,
     fontSize: 15,
-    maxHeight: 120,
+    minHeight: 46,
+    maxHeight: 110,
     borderWidth: 1,
     borderColor: COLORS.border,
     textAlignVertical: "top",
   },
   sendBtn: {
     minWidth: 72,
-    height: 44,
-    borderRadius: 22,
+    height: 46,
+    borderRadius: 23,
     backgroundColor: COLORS.primary,
     alignItems: "center",
     justifyContent: "center",

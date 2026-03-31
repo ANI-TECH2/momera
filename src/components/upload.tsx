@@ -1,16 +1,17 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   View,
   Text,
   TextInput,
   Pressable,
   StyleSheet,
-  SafeAreaView,
   StatusBar,
   ActivityIndicator,
   Alert,
   ScrollView,
+  Platform,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
@@ -31,6 +32,26 @@ export default function UploadScreen() {
   const [fileType, setFileType] = useState<"document" | "image">("document");
   const { session } = useAuth();
 
+  const hasDescription = description.trim().length > 0;
+  const canSubmit = !!selectedFile && hasDescription && !loading;
+
+  const fileMeta = useMemo(() => {
+    if (!selectedFile) return null;
+
+    const sizeLabel = selectedFile.size
+      ? selectedFile.size >= 1024 * 1024
+        ? `${(selectedFile.size / (1024 * 1024)).toFixed(2)} MB`
+        : `${(selectedFile.size / 1024).toFixed(1)} KB`
+      : "Unknown size";
+
+    return {
+      icon: fileType === "image" ? "🖼️" : "📄",
+      typeLabel: fileType === "image" ? "Image file" : "Document file",
+      sizeLabel,
+      name: selectedFile.name || "Selected file",
+    };
+  }, [selectedFile, fileType]);
+
   const pickDocument = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
@@ -45,7 +66,7 @@ export default function UploadScreen() {
         multiple: false,
       });
 
-      if (!result.canceled && result.assets && result.assets.length > 0) {
+      if (!result.canceled && result.assets?.length > 0) {
         setSelectedFile(result.assets[0]);
         setFileType("document");
       }
@@ -75,7 +96,7 @@ export default function UploadScreen() {
         quality: 0.8,
       });
 
-      if (!result.canceled && result.assets && result.assets.length > 0) {
+      if (!result.canceled && result.assets?.length > 0) {
         setSelectedFile(result.assets[0]);
         setFileType("image");
       }
@@ -150,71 +171,96 @@ export default function UploadScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="light-content" backgroundColor={COLORS.background} />
+    <SafeAreaView style={styles.safe} edges={["top", "left", "right", "bottom"]}>
+      <StatusBar
+        barStyle="light-content"
+        backgroundColor={COLORS.background}
+        translucent={false}
+      />
 
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} style={styles.backBtn}>
-          <Text style={styles.backText}>← Back</Text>
+          <Text style={styles.backText}>←</Text>
         </Pressable>
 
-        <Text style={styles.headerTitle}>Upload File</Text>
+        <View style={styles.headerCenter}>
+          <Text style={styles.headerTitle}>Upload File</Text>
+          <Text style={styles.headerSubtitle}>Save documents and images privately</Text>
+        </View>
 
         <View style={styles.headerRight} />
       </View>
 
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
-        {!selectedFile && (
-          <View style={styles.pickSection}>
-            <Text style={styles.sectionLabel}>Choose what to upload</Text>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        {!selectedFile ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Choose what to upload</Text>
+            <Text style={styles.sectionSubtext}>
+              Select a document or image you want to save.
+            </Text>
 
-            <Pressable style={styles.pickBtn} onPress={pickDocument}>
-              <Text style={styles.pickIcon}>📄</Text>
-              <Text style={styles.pickTitle}>Document / PDF</Text>
-              <Text style={styles.pickSub}>
-                PDF, Word, Text files, Markdown
-              </Text>
+            <Pressable style={styles.optionCard} onPress={pickDocument}>
+              <View style={styles.optionIconWrap}>
+                <Text style={styles.optionIcon}>📄</Text>
+              </View>
+              <View style={styles.optionTextWrap}>
+                <Text style={styles.optionTitle}>Document / PDF</Text>
+                <Text style={styles.optionSub}>
+                  PDF, Word, text files, markdown
+                </Text>
+              </View>
             </Pressable>
 
-            <Pressable style={styles.pickBtn} onPress={pickImage}>
-              <Text style={styles.pickIcon}>🖼️</Text>
-              <Text style={styles.pickTitle}>Image / Photo</Text>
-              <Text style={styles.pickSub}>
-                JPG, PNG, screenshots (crop & edit)
-              </Text>
+            <Pressable style={styles.optionCard} onPress={pickImage}>
+              <View style={styles.optionIconWrap}>
+                <Text style={styles.optionIcon}>🖼️</Text>
+              </View>
+              <View style={styles.optionTextWrap}>
+                <Text style={styles.optionTitle}>Image / Photo</Text>
+                <Text style={styles.optionSub}>
+                  JPG, PNG, screenshots, gallery images
+                </Text>
+              </View>
             </Pressable>
           </View>
-        )}
+        ) : (
+          <View style={styles.selectedCard}>
+            <View style={styles.selectedTopRow}>
+              <View style={styles.selectedIconWrap}>
+                <Text style={styles.selectedIcon}>{fileMeta?.icon}</Text>
+              </View>
 
-        {selectedFile && (
-          <View style={styles.filePreview}>
-            <View style={styles.filePreviewHeader}>
-              <Text style={styles.filePreviewIcon}>
-                {fileType === "image" ? "🖼️" : "📄"}
-              </Text>
-
-              <View style={styles.filePreviewInfo}>
-                <Text style={styles.filePreviewName} numberOfLines={1}>
-                  {selectedFile.name || "Selected file"}
+              <View style={styles.selectedInfo}>
+                <Text style={styles.selectedName} numberOfLines={1}>
+                  {fileMeta?.name}
                 </Text>
-                <Text style={styles.filePreviewSize}>
-                  {selectedFile.size
-                    ? `${(selectedFile.size / 1024).toFixed(1)} KB`
-                    : "Unknown size"}
+                <Text style={styles.selectedMeta}>
+                  {fileMeta?.typeLabel} • {fileMeta?.sizeLabel}
                 </Text>
               </View>
 
-              <Pressable onPress={clearFile} style={styles.clearBtn}>
-                <Text style={styles.clearText}>✕</Text>
+              <Pressable onPress={clearFile} style={styles.removeBtn}>
+                <Text style={styles.removeBtnText}>✕</Text>
               </Pressable>
+            </View>
+
+            <View style={styles.selectedBadge}>
+              <Text style={styles.selectedBadgeText}>
+                Ready to save
+              </Text>
             </View>
           </View>
         )}
 
-        <View style={styles.descSection}>
-          <Text style={styles.sectionLabel}>Add a description *</Text>
-          <Text style={styles.sectionHint}>
-            This helps you find the file later. Be specific.
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Description</Text>
+          <Text style={styles.sectionSubtext}>
+            Add a clear description so you can search for this file later.
           </Text>
 
           <TextInput
@@ -224,45 +270,47 @@ export default function UploadScreen() {
             placeholder="e.g. Food receipt from Shoprite March 28"
             placeholderTextColor={COLORS.textSecondary}
             multiline
-            numberOfLines={4}
+            numberOfLines={5}
             maxLength={300}
+            textAlignVertical="top"
           />
 
-          <Text style={styles.charCount}>{description.length}/300</Text>
+          <View style={styles.inputFooter}>
+            <Text style={styles.helperText}>
+              Be specific so retrieval works better.
+            </Text>
+            <Text style={styles.charCount}>{description.length}/300</Text>
+          </View>
         </View>
 
-        <View style={styles.tipsBox}>
-          <Text style={styles.tipsTitle}>💡 Good description examples:</Text>
-          <Text style={styles.tipItem}>
-            • Receipt for groceries from Shoprite
-          </Text>
-          <Text style={styles.tipItem}>
-            • My class assignment notes March 2026
-          </Text>
+        <View style={styles.tipsCard}>
+          <Text style={styles.tipsTitle}>Good description examples</Text>
+          <Text style={styles.tipItem}>• Receipt for groceries from Shoprite</Text>
+          <Text style={styles.tipItem}>• My class assignment notes March 2026</Text>
           <Text style={styles.tipItem}>• Payment proof for rent March</Text>
         </View>
 
-        {selectedFile && (
-          <Pressable
-            style={[
-              styles.uploadBtn,
-              (!description.trim() || loading) && styles.uploadBtnDisabled,
-            ]}
-            onPress={uploadFile}
-            disabled={!description.trim() || loading}
-          >
-            {loading ? (
-              <ActivityIndicator color={COLORS.text} />
-            ) : (
-              <Text style={styles.uploadBtnText}>Save File Silently</Text>
-            )}
-          </Pressable>
-        )}
+        <Pressable
+          style={[styles.uploadBtn, !canSubmit && styles.uploadBtnDisabled]}
+          onPress={uploadFile}
+          disabled={!canSubmit}
+        >
+          {loading ? (
+            <ActivityIndicator color={COLORS.text} />
+          ) : (
+            <Text style={styles.uploadBtnText}>
+              {selectedFile ? "Save File" : "Select a file first"}
+            </Text>
+          )}
+        </Pressable>
 
-        <Text style={styles.noteText}>
-          🔒 Your file will be saved privately. No preview will be shown in
-          chat. Ask me to find it anytime.
-        </Text>
+        <View style={styles.noteCard}>
+          <Text style={styles.noteTitle}>Private upload</Text>
+          <Text style={styles.noteText}>
+            Your file will be saved privately. It will not appear as a chat preview.
+            You can ask the app to find it later using your description.
+          </Text>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -273,166 +321,275 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.background,
   },
+
   header: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingTop: 4,
+    paddingBottom: 14,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
+    backgroundColor: COLORS.background,
   },
   backBtn: {
-    padding: 4,
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.card,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
   backText: {
-    color: COLORS.secondary,
-    fontSize: 15,
+    color: COLORS.text,
+    fontSize: 20,
+    fontWeight: "700",
+    marginTop: Platform.OS === "android" ? -1 : 0,
+  },
+  headerCenter: {
+    flex: 1,
+    paddingHorizontal: 12,
   },
   headerTitle: {
     color: COLORS.text,
-    fontSize: 17,
-    fontWeight: "700",
+    fontSize: 18,
+    fontWeight: "800",
   },
-  headerRight: {
-    width: 60,
-  },
-  scroll: {
-    flex: 1,
-  },
-  content: {
-    padding: 20,
-    gap: 20,
-  },
-  pickSection: {
-    gap: 12,
-  },
-  sectionLabel: {
-    color: COLORS.text,
-    fontSize: 15,
-    fontWeight: "600",
-    marginBottom: 4,
-  },
-  sectionHint: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
-    marginBottom: 8,
-  },
-  pickBtn: {
-    backgroundColor: COLORS.card,
-    borderRadius: 14,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    alignItems: "center",
-  },
-  pickIcon: {
-    fontSize: 32,
-    marginBottom: 8,
-  },
-  pickTitle: {
-    color: COLORS.text,
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  pickSub: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
-    marginTop: 4,
-    textAlign: "center",
-  },
-  filePreview: {
-    backgroundColor: COLORS.card,
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: COLORS.primary,
-  },
-  filePreviewHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  filePreviewIcon: {
-    fontSize: 28,
-  },
-  filePreviewInfo: {
-    flex: 1,
-  },
-  filePreviewName: {
-    color: COLORS.text,
-    fontSize: 14,
-    fontWeight: "600",
-  },
-  filePreviewSize: {
+  headerSubtitle: {
     color: COLORS.textSecondary,
     fontSize: 12,
     marginTop: 2,
   },
-  clearBtn: {
-    padding: 6,
+  headerRight: {
+    width: 42,
   },
-  clearText: {
-    color: COLORS.textSecondary,
-    fontSize: 16,
+
+  scroll: {
+    flex: 1,
   },
-  descSection: {
-    gap: 4,
+  content: {
+    padding: 18,
+    paddingBottom: 32,
+    gap: 18,
   },
-  descInput: {
+
+  section: {
     backgroundColor: COLORS.card,
-    borderRadius: 14,
-    padding: 14,
-    color: COLORS.text,
-    fontSize: 15,
+    borderRadius: 18,
+    padding: 16,
     borderWidth: 1,
     borderColor: COLORS.border,
-    minHeight: 100,
-    textAlignVertical: "top",
-    marginTop: 8,
   },
-  charCount: {
-    color: COLORS.textSecondary,
-    fontSize: 11,
-    alignSelf: "flex-end",
-    marginTop: 4,
-  },
-  tipsBox: {
-    backgroundColor: COLORS.card,
-    borderRadius: 12,
-    padding: 14,
-    borderLeftWidth: 3,
-    borderLeftColor: COLORS.primary,
-  },
-  tipsTitle: {
-    color: COLORS.text,
-    fontSize: 13,
-    fontWeight: "600",
-    marginBottom: 8,
-  },
-  tipItem: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
-    marginBottom: 4,
-  },
-  uploadBtn: {
-    backgroundColor: COLORS.primary,
-    borderRadius: 14,
-    padding: 16,
-    alignItems: "center",
-  },
-  uploadBtnDisabled: {
-    backgroundColor: COLORS.border,
-  },
-  uploadBtnText: {
+  sectionTitle: {
     color: COLORS.text,
     fontSize: 16,
     fontWeight: "700",
   },
+  sectionSubtext: {
+    color: COLORS.textSecondary,
+    fontSize: 13,
+    lineHeight: 20,
+    marginTop: 4,
+    marginBottom: 14,
+  },
+
+  optionCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: COLORS.background,
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    marginBottom: 12,
+  },
+  optionIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.card,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    marginRight: 12,
+  },
+  optionIcon: {
+    fontSize: 24,
+  },
+  optionTextWrap: {
+    flex: 1,
+  },
+  optionTitle: {
+    color: COLORS.text,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  optionSub: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    marginTop: 4,
+    lineHeight: 18,
+  },
+
+  selectedCard: {
+    backgroundColor: COLORS.card,
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+  },
+  selectedTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  selectedIconWrap: {
+    width: 54,
+    height: 54,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.background,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    marginRight: 12,
+  },
+  selectedIcon: {
+    fontSize: 24,
+  },
+  selectedInfo: {
+    flex: 1,
+    marginRight: 10,
+  },
+  selectedName: {
+    color: COLORS.text,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  selectedMeta: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    marginTop: 4,
+  },
+  removeBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.background,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  removeBtnText: {
+    color: COLORS.textSecondary,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  selectedBadge: {
+    alignSelf: "flex-start",
+    marginTop: 14,
+    backgroundColor: COLORS.background,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  selectedBadgeText: {
+    color: COLORS.primary,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+
+  descInput: {
+    minHeight: 120,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    backgroundColor: COLORS.background,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    color: COLORS.text,
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  inputFooter: {
+    marginTop: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  helperText: {
+    flex: 1,
+    color: COLORS.textSecondary,
+    fontSize: 11,
+  },
+  charCount: {
+    color: COLORS.textSecondary,
+    fontSize: 11,
+    fontWeight: "600",
+  },
+
+  tipsCard: {
+    backgroundColor: COLORS.card,
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  tipsTitle: {
+    color: COLORS.text,
+    fontSize: 14,
+    fontWeight: "700",
+    marginBottom: 10,
+  },
+  tipItem: {
+    color: COLORS.textSecondary,
+    fontSize: 13,
+    lineHeight: 20,
+    marginBottom: 6,
+  },
+
+  uploadBtn: {
+    minHeight: 56,
+    borderRadius: 16,
+    backgroundColor: COLORS.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+  },
+  uploadBtnDisabled: {
+    opacity: 0.55,
+  },
+  uploadBtnText: {
+    color: COLORS.text,
+    fontSize: 16,
+    fontWeight: "800",
+  },
+
+  noteCard: {
+    backgroundColor: COLORS.card,
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    marginBottom: 8,
+  },
+  noteTitle: {
+    color: COLORS.text,
+    fontSize: 14,
+    fontWeight: "700",
+    marginBottom: 6,
+  },
   noteText: {
     color: COLORS.textSecondary,
     fontSize: 12,
-    textAlign: "center",
-    lineHeight: 18,
+    lineHeight: 20,
   },
 });
