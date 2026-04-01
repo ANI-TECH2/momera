@@ -61,14 +61,27 @@ export default function UploadScreen() {
           "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
           "text/plain",
           "text/markdown",
+          "image/*",
         ],
         copyToCacheDirectory: true,
         multiple: false,
       });
 
       if (!result.canceled && result.assets?.length > 0) {
-        setSelectedFile(result.assets[0]);
-        setFileType("document");
+        const asset = result.assets[0];
+
+        setSelectedFile({
+          uri: asset.uri,
+          name: asset.name,
+          size: asset.size,
+          mimeType: asset.mimeType || "application/octet-stream",
+        });
+
+        if ((asset.mimeType || "").startsWith("image/")) {
+          setFileType("image");
+        } else {
+          setFileType("document");
+        }
       }
     } catch (error) {
       console.error("[Upload] pickDocument error:", error);
@@ -90,14 +103,22 @@ export default function UploadScreen() {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ["images"],
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
         aspect: [4, 3],
         quality: 0.8,
       });
 
       if (!result.canceled && result.assets?.length > 0) {
-        setSelectedFile(result.assets[0]);
+        const asset = result.assets[0];
+
+        setSelectedFile({
+          uri: asset.uri,
+          name: asset.fileName || `image_${Date.now()}.jpg`,
+          size: asset.fileSize,
+          mimeType: asset.mimeType || "image/jpeg",
+        });
+
         setFileType("image");
       }
     } catch (error) {
@@ -108,6 +129,12 @@ export default function UploadScreen() {
 
   const uploadFile = async () => {
     const token = session?.access_token;
+
+    console.log("[Upload] API_BASE:", API_BASE);
+    console.log("[Upload] token exists:", !!token);
+    console.log("[Upload] selectedFile:", selectedFile);
+    console.log("[Upload] description:", description.trim());
+    console.log("[Upload] fileType:", fileType);
 
     if (!token) {
       Alert.alert("Login Required", "Please log in to upload files.");
@@ -126,18 +153,32 @@ export default function UploadScreen() {
     setLoading(true);
 
     try {
+      const fileName =
+        selectedFile.name ||
+        (fileType === "image"
+          ? `image_${Date.now()}.jpg`
+          : `file_${Date.now()}.bin`);
+
+      const mimeType =
+        selectedFile.mimeType ||
+        (fileType === "image" ? "image/jpeg" : "application/octet-stream");
+
       const formData = new FormData();
 
       formData.append("file", {
         uri: selectedFile.uri,
-        name: selectedFile.name || `file_${Date.now()}`,
-        type:
-          selectedFile.mimeType ||
-          (fileType === "image" ? "image/jpeg" : "application/octet-stream"),
+        name: fileName,
+        type: mimeType,
       } as any);
 
       formData.append("description", description.trim());
       formData.append("fileType", fileType);
+
+      console.log("[Upload] sending file:", {
+        uri: selectedFile.uri,
+        name: fileName,
+        type: mimeType,
+      });
 
       const res = await fetch(`${API_BASE}/api/upload`, {
         method: "POST",
@@ -147,18 +188,41 @@ export default function UploadScreen() {
         body: formData,
       });
 
-      const data = await res.json();
+      const rawText = await res.text();
+      console.log("[Upload] status:", res.status);
+      console.log("[Upload] raw response:", rawText);
 
-      if (!res.ok || data?.error) {
-        Alert.alert("Upload failed", data?.error || "Could not upload file.");
+      let data: any = null;
+      try {
+        data = rawText ? JSON.parse(rawText) : null;
+      } catch {
+        data = null;
+      }
+
+      if (!res.ok) {
+        Alert.alert(
+          "Upload failed",
+          data?.error || `Server error: ${res.status}`
+        );
+        return;
+      }
+
+      if (data?.error) {
+        Alert.alert("Upload failed", data.error);
         return;
       }
 
       Alert.alert("Success", "File saved successfully.");
+      setSelectedFile(null);
+      setDescription("");
+      setFileType("document");
       router.back();
-    } catch (error) {
+    } catch (error: any) {
       console.error("[Upload] uploadFile error:", error);
-      Alert.alert("Error", "Upload failed. Please try again.");
+      Alert.alert(
+        "Error",
+        error?.message || "Upload failed. Please try again."
+      );
     } finally {
       setLoading(false);
     }
@@ -250,9 +314,7 @@ export default function UploadScreen() {
             </View>
 
             <View style={styles.selectedBadge}>
-              <Text style={styles.selectedBadgeText}>
-                Ready to save
-              </Text>
+              <Text style={styles.selectedBadgeText}>Ready to save</Text>
             </View>
           </View>
         )}
@@ -317,11 +379,7 @@ export default function UploadScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-  },
-
+  safe: { flex: 1, backgroundColor: COLORS.background },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -348,33 +406,12 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     marginTop: Platform.OS === "android" ? -1 : 0,
   },
-  headerCenter: {
-    flex: 1,
-    paddingHorizontal: 12,
-  },
-  headerTitle: {
-    color: COLORS.text,
-    fontSize: 18,
-    fontWeight: "800",
-  },
-  headerSubtitle: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
-    marginTop: 2,
-  },
-  headerRight: {
-    width: 42,
-  },
-
-  scroll: {
-    flex: 1,
-  },
-  content: {
-    padding: 18,
-    paddingBottom: 32,
-    gap: 18,
-  },
-
+  headerCenter: { flex: 1, paddingHorizontal: 12 },
+  headerTitle: { color: COLORS.text, fontSize: 18, fontWeight: "800" },
+  headerSubtitle: { color: COLORS.textSecondary, fontSize: 12, marginTop: 2 },
+  headerRight: { width: 42 },
+  scroll: { flex: 1 },
+  content: { padding: 18, paddingBottom: 32, gap: 18 },
   section: {
     backgroundColor: COLORS.card,
     borderRadius: 18,
@@ -382,11 +419,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  sectionTitle: {
-    color: COLORS.text,
-    fontSize: 16,
-    fontWeight: "700",
-  },
+  sectionTitle: { color: COLORS.text, fontSize: 16, fontWeight: "700" },
   sectionSubtext: {
     color: COLORS.textSecondary,
     fontSize: 13,
@@ -394,7 +427,6 @@ const styles = StyleSheet.create({
     marginTop: 4,
     marginBottom: 14,
   },
-
   optionCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -416,24 +448,15 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     marginRight: 12,
   },
-  optionIcon: {
-    fontSize: 24,
-  },
-  optionTextWrap: {
-    flex: 1,
-  },
-  optionTitle: {
-    color: COLORS.text,
-    fontSize: 15,
-    fontWeight: "700",
-  },
+  optionIcon: { fontSize: 24 },
+  optionTextWrap: { flex: 1 },
+  optionTitle: { color: COLORS.text, fontSize: 15, fontWeight: "700" },
   optionSub: {
     color: COLORS.textSecondary,
     fontSize: 12,
     marginTop: 4,
     lineHeight: 18,
   },
-
   selectedCard: {
     backgroundColor: COLORS.card,
     borderRadius: 18,
@@ -441,10 +464,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.primary,
   },
-  selectedTopRow: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
+  selectedTopRow: { flexDirection: "row", alignItems: "center" },
   selectedIconWrap: {
     width: 54,
     height: 54,
@@ -456,18 +476,9 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     marginRight: 12,
   },
-  selectedIcon: {
-    fontSize: 24,
-  },
-  selectedInfo: {
-    flex: 1,
-    marginRight: 10,
-  },
-  selectedName: {
-    color: COLORS.text,
-    fontSize: 15,
-    fontWeight: "700",
-  },
+  selectedIcon: { fontSize: 24 },
+  selectedInfo: { flex: 1, marginRight: 10 },
+  selectedName: { color: COLORS.text, fontSize: 15, fontWeight: "700" },
   selectedMeta: {
     color: COLORS.textSecondary,
     fontSize: 12,
@@ -483,11 +494,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  removeBtnText: {
-    color: COLORS.textSecondary,
-    fontSize: 15,
-    fontWeight: "700",
-  },
+  removeBtnText: { color: COLORS.textSecondary, fontSize: 15, fontWeight: "700" },
   selectedBadge: {
     alignSelf: "flex-start",
     marginTop: 14,
@@ -498,12 +505,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 999,
   },
-  selectedBadgeText: {
-    color: COLORS.primary,
-    fontSize: 12,
-    fontWeight: "700",
-  },
-
+  selectedBadgeText: { color: COLORS.primary, fontSize: 12, fontWeight: "700" },
   descInput: {
     minHeight: 120,
     borderRadius: 16,
@@ -523,17 +525,8 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 12,
   },
-  helperText: {
-    flex: 1,
-    color: COLORS.textSecondary,
-    fontSize: 11,
-  },
-  charCount: {
-    color: COLORS.textSecondary,
-    fontSize: 11,
-    fontWeight: "600",
-  },
-
+  helperText: { flex: 1, color: COLORS.textSecondary, fontSize: 11 },
+  charCount: { color: COLORS.textSecondary, fontSize: 11, fontWeight: "600" },
   tipsCard: {
     backgroundColor: COLORS.card,
     borderRadius: 18,
@@ -541,19 +534,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  tipsTitle: {
-    color: COLORS.text,
-    fontSize: 14,
-    fontWeight: "700",
-    marginBottom: 10,
-  },
+  tipsTitle: { color: COLORS.text, fontSize: 14, fontWeight: "700", marginBottom: 10 },
   tipItem: {
     color: COLORS.textSecondary,
     fontSize: 13,
     lineHeight: 20,
     marginBottom: 6,
   },
-
   uploadBtn: {
     minHeight: 56,
     borderRadius: 16,
@@ -564,15 +551,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.primary,
   },
-  uploadBtnDisabled: {
-    opacity: 0.55,
-  },
-  uploadBtnText: {
-    color: COLORS.text,
-    fontSize: 16,
-    fontWeight: "800",
-  },
-
+  uploadBtnDisabled: { opacity: 0.55 },
+  uploadBtnText: { color: COLORS.text, fontSize: 16, fontWeight: "800" },
   noteCard: {
     backgroundColor: COLORS.card,
     borderRadius: 18,
@@ -581,15 +561,6 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     marginBottom: 8,
   },
-  noteTitle: {
-    color: COLORS.text,
-    fontSize: 14,
-    fontWeight: "700",
-    marginBottom: 6,
-  },
-  noteText: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
-    lineHeight: 20,
-  },
+  noteTitle: { color: COLORS.text, fontSize: 14, fontWeight: "700", marginBottom: 6 },
+  noteText: { color: COLORS.textSecondary, fontSize: 12, lineHeight: 20 },
 });

@@ -15,6 +15,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
+
 import { useAuth } from "@/lib/auth";
 import type { UserMetadata } from "@/lib/types";
 import { COLORS, API_BASE, FREE_STORAGE_LIMIT } from "@/lib/constants";
@@ -36,7 +37,7 @@ export default function SettingsScreen() {
   const userMetadata = (user?.user_metadata as UserMetadata) || {};
   const displayName =
     userMetadata.full_name || user?.email?.split("@")[0] || "User";
-  const avatarUrl = userMetadata.avatar_url;
+  const avatarUrl = userMetadata.avatar_url || null;
   const nameInitial = displayName.charAt(0).toUpperCase();
 
   const [editingName, setEditingName] = useState(displayName);
@@ -78,10 +79,11 @@ export default function SettingsScreen() {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ["images"],
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.8,
+        base64: true,
       });
 
       if (!result.canceled && result.assets?.[0]) {
@@ -95,28 +97,43 @@ export default function SettingsScreen() {
 
   const uploadAvatar = async (uri: string): Promise<string | null> => {
     try {
-      const fileExt = uri.split(".").pop() || "jpg";
-      const fileName = `${user?.id}/avatar.${fileExt}`;
-      const file = {
-        uri,
-        name: fileName,
-        type: "image/jpeg",
-      } as any;
+      if (!user?.id) {
+        Alert.alert("Error", "User not found.");
+        return null;
+      }
 
-      const { error } = await supabase.storage
+      const fileExt = uri.split(".").pop()?.toLowerCase() || "jpg";
+      const safeExt = fileExt === "png" ? "png" : "jpg";
+      const filePath = `${user.id}/avatar.${safeExt}`;
+      const contentType = safeExt === "png" ? "image/png" : "image/jpeg";
+
+      const response = await fetch(uri);
+      const blob = await response.blob();
+
+      const { error: uploadError } = await supabase.storage
         .from("avatars")
-        .upload(fileName, file, { upsert: true });
+        .upload(filePath, blob, {
+          contentType,
+          upsert: true,
+        });
 
-      if (error) throw error;
+      if (uploadError) {
+        console.error("[Settings] uploadAvatar upload error:", uploadError);
+        Alert.alert("Upload failed", uploadError.message);
+        return null;
+      }
 
-      const {
-        data: { publicUrl },
-      } = supabase.storage.from("avatars").getPublicUrl(fileName);
+      const { data } = supabase.storage.from("avatars").getPublicUrl(filePath);
 
-      return publicUrl;
-    } catch (error) {
+      if (!data?.publicUrl) {
+        Alert.alert("Upload failed", "Could not get image URL.");
+        return null;
+      }
+
+      return `${data.publicUrl}?t=${Date.now()}`;
+    } catch (error: any) {
       console.error("[Settings] uploadAvatar error:", error);
-      Alert.alert("Upload failed", "Could not upload profile picture.");
+      Alert.alert("Upload failed", error?.message || "Something went wrong.");
       return null;
     }
   };
@@ -133,11 +150,12 @@ export default function SettingsScreen() {
       let newAvatarUrl = avatarUrl;
 
       if (profileImageUri) {
-        newAvatarUrl = await uploadAvatar(profileImageUri);
-        if (!newAvatarUrl) {
+        const uploadedUrl = await uploadAvatar(profileImageUri);
+        if (!uploadedUrl) {
           setSavingProfile(false);
           return;
         }
+        newAvatarUrl = uploadedUrl;
       }
 
       const { error } = await supabase.auth.updateUser({
@@ -242,7 +260,10 @@ export default function SettingsScreen() {
 
   if (authLoading) {
     return (
-      <SafeAreaView style={styles.safe} edges={["top", "left", "right", "bottom"]}>
+      <SafeAreaView
+        style={styles.safe}
+        edges={["top", "left", "right", "bottom"]}
+      >
         <StatusBar
           barStyle="light-content"
           backgroundColor={COLORS.background}
@@ -259,7 +280,10 @@ export default function SettingsScreen() {
   if (!user) return null;
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top", "left", "right", "bottom"]}>
+    <SafeAreaView
+      style={styles.safe}
+      edges={["top", "left", "right", "bottom"]}
+    >
       <StatusBar
         barStyle="light-content"
         backgroundColor={COLORS.background}
@@ -282,7 +306,10 @@ export default function SettingsScreen() {
         <Pressable style={styles.profileCard} onPress={openEditProfile}>
           <View style={styles.profileAvatar}>
             {currentAvatar ? (
-              <Image source={{ uri: currentAvatar }} style={styles.profileAvatarImage} />
+              <Image
+                source={{ uri: currentAvatar }}
+                style={styles.profileAvatarImage}
+              />
             ) : (
               <Text style={styles.profileAvatarText}>{nameInitial}</Text>
             )}
@@ -377,9 +404,7 @@ export default function SettingsScreen() {
               <Text style={styles.storagePercentText}>
                 {storagePercent.toFixed(0)}% used
               </Text>
-              <Text style={styles.storageNote}>
-                Files stored privately
-              </Text>
+              <Text style={styles.storageNote}>Files stored privately</Text>
             </View>
           </View>
         </View>
