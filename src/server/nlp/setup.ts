@@ -15,7 +15,7 @@ export async function getNlp(): Promise<NlpManager> {
       const manager = new NlpManager({
         languages: ["en"],
         forceNER: true,
-        nlu: { useNoneFeature: true }, // ✅ teaches model what "none" looks like
+        nlu: { useNoneFeature: true },
         autoSave: false,
       });
 
@@ -23,6 +23,7 @@ export async function getNlp(): Promise<NlpManager> {
       // INTENT: SAVE
       // ────────────────────────────────────────────────────────
       const saveDocs = [
+        // General saves
         "save this",
         "save my",
         "save these",
@@ -56,6 +57,27 @@ export async function getNlp(): Promise<NlpManager> {
         "add this to my memory",
         "record my number",
         "record this information",
+        // Price saves
+        "save coke price 300",
+        "save garri price 500",
+        "save rice cost 2000",
+        "save the price of tomatoes 150",
+        "save fuel price 650",
+        "save bread selling price 200",
+        "save the cost of milk 400",
+        "save indomie price 120",
+        "save current price of sugar 800",
+        "save beans price 1200",
+        "store the price of eggs 100",
+        "remember coke costs 300",
+        "record price of petrol 650",
+        "keep price of tomatoes 200",
+        "save market price of yam 500",
+        "save palm oil price 3000",
+        "save price of noodles 150",
+        "save price of water 50",
+        "save price of chicken 3500",
+        "save the cost of flour 1500",
       ];
       saveDocs.forEach(doc => manager.addDocument("en", doc, "intent.save"));
 
@@ -63,6 +85,7 @@ export async function getNlp(): Promise<NlpManager> {
       // INTENT: RETRIEVE
       // ────────────────────────────────────────────────────────
       const retrieveDocs = [
+        // General retrieves
         "find my number",
         "find my password",
         "find john",
@@ -97,6 +120,27 @@ export async function getNlp(): Promise<NlpManager> {
         "where is my password",
         "i need my number",
         "can you find my classmate",
+        // Price retrieves
+        "what is the price of coke",
+        "find price of garri",
+        "show me coke price",
+        "how much is rice",
+        "get the cost of tomatoes",
+        "what did i save for bread price",
+        "find my saved prices",
+        "show all prices",
+        "price of fuel",
+        "how much is indomie",
+        "what is the cost of beans",
+        "show me the price of milk",
+        "find the price of yam",
+        "how much did i save for sugar",
+        "what is palm oil price",
+        "check price of chicken",
+        "look up price of eggs",
+        "retrieve price of petrol",
+        "get price of noodles",
+        "what is the market price of flour",
       ];
       retrieveDocs.forEach(doc => manager.addDocument("en", doc, "intent.retrieve"));
 
@@ -117,6 +161,13 @@ export async function getNlp(): Promise<NlpManager> {
         "erase my password",
         "i want to delete my note",
         "please remove this",
+        "delete price of coke",
+        "remove saved price of garri",
+        "delete that price",
+        "clear price of rice",
+        "erase the price i saved",
+        "remove the coke price",
+        "delete my saved prices",
       ];
       deleteDocs.forEach(doc => manager.addDocument("en", doc, "intent.delete"));
 
@@ -160,6 +211,9 @@ export async function getNlp(): Promise<NlpManager> {
         "guide me",
         "tutorial",
         "instructions",
+        "how do i save a price",
+        "how do i find a price",
+        "how do i check price",
       ];
       helpDocs.forEach(doc => manager.addDocument("en", doc, "intent.help"));
 
@@ -241,6 +295,12 @@ export async function getNlp(): Promise<NlpManager> {
         /\b(?:password|pin|passcode|otp|secret)\b/gi
       );
 
+      // Price keyword entity — helps downstream handlers detect price intent
+      manager.addRegexEntity(
+        "price_like", "en",
+        /\b(?:price|prices|cost|costs|rate|rates|amount|selling|market price|how much)\b/gi
+      );
+
       // Places
       manager.addNamedEntityText("place", "port harcourt", ["en"], ["port harcourt", "ph", "portharcourt"]);
       manager.addNamedEntityText("place", "lagos", ["en"], ["lagos"]);
@@ -251,16 +311,16 @@ export async function getNlp(): Promise<NlpManager> {
       // ANSWERS
       // ────────────────────────────────────────────────────────
       manager.addAnswer("en", "intent.greet",
-        "Hello! 👋 How can I help you today?\n\n💾 Save: 'save my [info]'\n🔍 Find: 'show my [topic]'\n📄 Upload: tap the + button"
+        "Hello! 👋 How can I help you today?\n\n💾 Save: 'save my [info]'\n💰 Price: 'save coke price 300'\n🔍 Find: 'show my [topic]'\n📄 Upload: tap the + button"
       );
 
       manager.addAnswer("en", "intent.help",
-        "Here's what I can do:\n\n💾 Save: 'save my classmate John 08034332394'\n🔍 Find: 'show my classmate John'\n📄 Upload: tap the + button\n🗑️ Delete: 'delete my note about John'"
+        "Here's what I can do:\n\n💾 Save info: 'save my classmate John 08034332394'\n💰 Save price: 'save coke price 300'\n🔍 Find info: 'show my classmate John'\n💸 Find price: 'what is the price of coke'\n📄 Upload: tap the + button\n🗑️ Delete: 'delete my note about John'"
       );
 
-      // ✅ Rule: Tell user when command is not understood
+      // Rule: Tell user when command is not understood
       manager.addAnswer("en", "intent.none",
-        "I didn't understand that. Try:\n\n💾 'save my [info]'\n🔍 'show my [topic]'\n📄 tap + to upload\n\nType 'help' to see all commands."
+        "I didn't understand that. Try:\n\n💾 'save my [info]'\n💰 'save coke price 300'\n🔍 'show my [topic]'\n💸 'price of coke'\n📄 tap + to upload\n\nType 'help' to see all commands."
       );
 
       await manager.train();
