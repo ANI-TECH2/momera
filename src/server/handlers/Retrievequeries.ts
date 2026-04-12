@@ -1,6 +1,8 @@
+
+
 // ─── RETRIEVE DB QUERIES ──────────────────────────────────────
 // All Supabase queries live here. No business logic — just data.
-
+ 
 import { serverSupabase } from "@/server/supabase";
 import {
   NoteRow,
@@ -13,26 +15,26 @@ import {
   buildFtsQuery,
 } from "@/server/handlers/Retrievehelpers";
 import { fuzzyRank, safeText } from "@/server/handlers/fuzzySearch";
-
+ 
 // ─────────────────────────────────────────────
 // Config
 // ─────────────────────────────────────────────
-
+ 
 const RESULT_LIMIT = 50; // final max results returned per section
 const RECENT_LIMIT = 10;
 const CANDIDATE_POOL_LIMIT = 500; // local pool used for ranking/fuzzy filtering
-
+ 
 // ─────────────────────────────────────────────
 // Shared helpers
 // ─────────────────────────────────────────────
-
+ 
 function sortByCreatedAtDesc<T extends { created_at?: string | null }>(rows: T[]): T[] {
   return [...rows].sort(
     (a, b) =>
       new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime()
   );
 }
-
+ 
 function sortByScoreThenDate(rows: ScoredNote[]): ScoredNote[] {
   return [...rows].sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
@@ -41,51 +43,68 @@ function sortByScoreThenDate(rows: ScoredNote[]): ScoredNote[] {
     );
   });
 }
-
+ 
 function dedupeById<T extends { id?: string | null }>(rows: T[]): T[] {
   const seen = new Set<string>();
   const out: T[] = [];
-
+ 
   for (const row of rows) {
     const id = String(row.id ?? "");
     if (!id || seen.has(id)) continue;
     seen.add(id);
     out.push(row);
   }
-
+ 
   return out;
 }
-
+ 
 function clampResults<T>(rows: T[], limit = RESULT_LIMIT): T[] {
   return rows.slice(0, limit);
 }
-
+ 
+// ─── Helper: build a combined haystack string from a note ─────
+ 
+function noteHaystack(note: NoteRow): string {
+  return normalizeSimpleText(
+    [
+      safeText(note.title),
+      safeText(note.content),
+      safeText(note.category),
+      safeText((note as NoteRow & { normalized_content?: string }).normalized_content),
+    ].join(" ")
+  );
+}
+ 
 // ─── NOTES ────────────────────────────────────────────────────
-
+ 
 export async function searchNotes(
   userId: string,
   keyword: string,
   phoneVariants: string[]
 ): Promise<NoteRow[]> {
   const scoreMap = new Map<string, ScoredNote>();
-
+ 
   const addResults = (notes: NoteRow[] | null, score: number) => {
     if (!notes?.length) return;
-
+ 
     for (const note of notes) {
       const id = String(note.id ?? "");
       if (!id) continue;
-
+ 
       const existing = scoreMap.get(id);
       if (!existing || score > existing.score) {
         scoreMap.set(id, { ...note, score });
       }
     }
   };
-
+ 
   const trimmedKeyword = (keyword ?? "").trim();
   const normalizedKeyword = normalizeSimpleText(trimmedKeyword.toLowerCase());
-
+ 
+  // Determine if this is a multi-word query
+  const words = splitKeywords(trimmedKeyword).filter((w) => w.length >= 2);
+  const isMultiWord = words.length > 1;
+ 
   // Pass 1 — phone variants
   if (phoneVariants.length) {
     const phoneQuery = phoneVariants
@@ -95,7 +114,7 @@ export async function searchNotes(
         return [`content.ilike.%${safe}%`, `title.ilike.%${safe}%`];
       })
       .join(",");
-
+ 
     if (phoneQuery) {
       const { data, error } = await serverSupabase
         .from("notes")
@@ -104,7 +123,7 @@ export async function searchNotes(
         .or(phoneQuery)
         .order("created_at", { ascending: false })
         .limit(RESULT_LIMIT);
-
+ 
       if (error) {
         console.error("[NoteSearch] Phone pass error:", error);
       } else {
@@ -112,8 +131,8 @@ export async function searchNotes(
       }
     }
   }
-
-  // Empty keyword -> return recent notes, not just 5
+ 
+  // Empty keyword -> return recent notes
   if (!trimmedKeyword) {
     const { data, error } = await serverSupabase
       .from("notes")
@@ -121,32 +140,32 @@ export async function searchNotes(
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
       .limit(RESULT_LIMIT);
-
+ 
     if (error) {
       console.error("[NoteSearch] Empty keyword fetch error:", error);
       return sortByScoreThenDate(Array.from(scoreMap.values())).slice(0, RESULT_LIMIT);
     }
-
+ 
     addResults((data ?? []) as NoteRow[], 0.25);
     return clampResults(sortByScoreThenDate(Array.from(scoreMap.values()))).map(
       ({ score, ...note }) => note as NoteRow
     );
   }
-
-  // Candidate pool for local ranking
+ 
+  // Candidate pool for local ranking (fetched once, reused in all local passes)
   const { data: strictPool, error: strictPoolError } = await serverSupabase
     .from("notes")
     .select("*")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(CANDIDATE_POOL_LIMIT);
-
-  const strictPoolRows = ((strictPool ?? []) as NoteRow[]);
-
+ 
+  const strictPoolRows = (strictPool ?? []) as NoteRow[];
+ 
   if (strictPoolError) {
     console.error("[NoteSearch] Strict pool error:", strictPoolError);
   } else {
-    // Pass 2 — strict exact normalized match
+    // Pass 2 — strict exact normalized match (whole field equals query)
     const strictRows = strictPoolRows.filter((note) => {
       const fields = [
         safeText(note.title),
@@ -154,16 +173,18 @@ export async function searchNotes(
         safeText(note.category),
         safeText((note as NoteRow & { normalized_content?: string }).normalized_content),
       ];
-
+ 
       return fields.some((field) => normalizeSimpleText(field) === normalizedKeyword);
     });
-
+ 
     if (strictRows.length > 0) {
       addResults(strictRows, 4.5);
     }
   }
-
-  // Pass 3 — exact ilike on content/title/category
+ 
+  // Pass 3 — exact phrase ilike on content/title/category
+  // For multi-word queries this already requires the full phrase (e.g. "car pin"),
+  // so it won't match notes that only contain "pin".
   {
     const safeKeyword = escapeLike(trimmedKeyword);
     const { data: exactData, error: exactError } = await serverSupabase
@@ -175,14 +196,14 @@ export async function searchNotes(
       )
       .order("created_at", { ascending: false })
       .limit(RESULT_LIMIT);
-
+ 
     if (exactError) {
       console.error("[NoteSearch] Exact pass error:", exactError);
     } else {
       addResults((exactData ?? []) as NoteRow[], 4);
     }
   }
-
+ 
   // Pass 4 — full-text search
   {
     const ftsQuery = buildFtsQuery(trimmedKeyword);
@@ -194,71 +215,75 @@ export async function searchNotes(
         .textSearch("fts", ftsQuery, { type: "websearch", config: "english" })
         .order("created_at", { ascending: false })
         .limit(RESULT_LIMIT);
-
+ 
       if (ftsError) {
         console.warn("[NoteSearch] FTS pass error:", ftsError.message);
       } else {
-        addResults((ftsData ?? []) as NoteRow[], 3);
+        // FTS for multi-word queries: filter locally to ensure ALL words are present.
+        // Postgres websearch FTS can return partial matches; we tighten it here.
+        const ftsRows = (ftsData ?? []) as NoteRow[];
+        const filtered = isMultiWord
+          ? ftsRows.filter((note) => {
+              const haystack = noteHaystack(note);
+              return words.every((w) => haystack.includes(normalizeSimpleText(w)));
+            })
+          : ftsRows;
+ 
+        addResults(filtered, 3);
       }
     }
   }
-
+ 
   // Pass 5 — normalized_content ilike
+  // For multi-word queries we skip the DB call and use the local pool instead,
+  // requiring ALL words to be present so that a search for "car pin" never
+  // returns notes that only contain "pin".
   {
-    const { data: normData, error: normError } = await serverSupabase
-      .from("notes")
-      .select("*")
-      .eq("user_id", userId)
-      .ilike("normalized_content", `%${escapeLike(normalizedKeyword)}%`)
-      .order("created_at", { ascending: false })
-      .limit(RESULT_LIMIT);
-
-    if (normError) {
-      console.error("[NoteSearch] Normalized pass error:", normError);
+    if (isMultiWord) {
+      // Local all-words filter against the already-fetched candidate pool
+      const allWordMatches = strictPoolRows.filter((note) => {
+        const haystack = noteHaystack(note);
+        return words.every((w) => haystack.includes(normalizeSimpleText(w)));
+      });
+      addResults(allWordMatches, 2);
     } else {
-      addResults((normData ?? []) as NoteRow[], 2);
-    }
-  }
-
-  // Pass 6 — individual word hits
-  {
-    const words = splitKeywords(trimmedKeyword).filter((w) => w.length >= 2);
-
-    if (words.length) {
-      const wordQuery = words
-        .flatMap((w) => {
-          const safe = escapeLike(w);
-          return [
-            `content.ilike.%${safe}%`,
-            `title.ilike.%${safe}%`,
-            `category.ilike.%${safe}%`,
-          ];
-        })
-        .join(",");
-
-      if (wordQuery) {
-        const { data: wordData, error: wordError } = await serverSupabase
-          .from("notes")
-          .select("*")
-          .eq("user_id", userId)
-          .or(wordQuery)
-          .order("created_at", { ascending: false })
-          .limit(RESULT_LIMIT);
-
-        if (wordError) {
-          console.error("[NoteSearch] Word pass error:", wordError);
-        } else {
-          addResults((wordData ?? []) as NoteRow[], 1);
-        }
+      // Single-word: DB ilike is fine
+      const { data: normData, error: normError } = await serverSupabase
+        .from("notes")
+        .select("*")
+        .eq("user_id", userId)
+        .ilike("normalized_content", `%${escapeLike(normalizedKeyword)}%`)
+        .order("created_at", { ascending: false })
+        .limit(RESULT_LIMIT);
+ 
+      if (normError) {
+        console.error("[NoteSearch] Normalized pass error:", normError);
+      } else {
+        addResults((normData ?? []) as NoteRow[], 2);
       }
     }
   }
-
-  // Pass 7 — fuzzy fallback
+ 
+  // Pass 6 — word hits (ALL words must match, not any)
+  // FIX: Previously used .or() which matched notes containing ANY single word.
+  // Now we filter the local candidate pool requiring every word to be present,
+  // so "car pin" no longer pulls in "door pin", "key pin", etc.
+  {
+    if (words.length > 0) {
+      const allWordMatches = strictPoolRows.filter((note) => {
+        const haystack = noteHaystack(note);
+        return words.every((w) => haystack.includes(normalizeSimpleText(w)));
+      });
+ 
+      addResults(allWordMatches, 1);
+    }
+  }
+ 
+  // Pass 7 — fuzzy fallback (only when no strong signal found)
   {
     const current = sortByScoreThenDate(Array.from(scoreMap.values()));
     const hasGoodNonFuzzy = current.some((row) => row.score >= 2);
-
+ 
     if (!hasGoodNonFuzzy && strictPoolRows.length > 0) {
       const ranked = fuzzyRank<NoteRow>(
         trimmedKeyword,
@@ -273,18 +298,18 @@ export async function searchNotes(
         RESULT_LIMIT,
         true
       );
-
+ 
       for (const entry of ranked) {
         addResults([entry.item], 0.5 + entry.score);
       }
     }
   }
-
+ 
   return clampResults(
     sortByScoreThenDate(Array.from(scoreMap.values()))
   ).map(({ score, ...note }) => note as NoteRow);
 }
-
+ 
 export async function fetchRecentNotes(userId: string): Promise<NoteRow[]> {
   const { data, error } = await serverSupabase
     .from("notes")
@@ -292,26 +317,26 @@ export async function fetchRecentNotes(userId: string): Promise<NoteRow[]> {
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(RECENT_LIMIT);
-
+ 
   if (error) {
     console.error("[NoteSearch] Recent notes error:", error);
     return [];
   }
-
+ 
   return (data ?? []) as NoteRow[];
 }
-
+ 
 // ─── PRICES ───────────────────────────────────────────────────
-
+ 
 const PRICE_SELECT =
   "id, product_name, price, currency, category, description, normalized_content, created_at";
-
+ 
 export async function searchProductPrices(
   userId: string,
   keyword: string
 ): Promise<ProductPriceRow[]> {
   const cleanKw = normalizeSimpleText(keyword);
-
+ 
   if (!cleanKw) {
     const { data, error } = await serverSupabase
       .from("product_prices")
@@ -319,40 +344,40 @@ export async function searchProductPrices(
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
       .limit(RESULT_LIMIT);
-
+ 
     if (error) {
       console.error("[PriceSearch] recent fetch error:", error);
       return [];
     }
-
+ 
     return (data ?? []) as ProductPriceRow[];
   }
-
+ 
   const { data: recentRows, error: recentError } = await serverSupabase
     .from("product_prices")
     .select(PRICE_SELECT)
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(CANDIDATE_POOL_LIMIT);
-
+ 
   if (recentError) {
     console.error("[PriceSearch] recent fetch error:", recentError);
     return [];
   }
-
+ 
   const rows = (recentRows ?? []) as ProductPriceRow[];
   const resultMap = new Map<string, ProductPriceRow>();
-
+ 
   const addRows = (items: ProductPriceRow[]) => {
     for (const row of items) {
       if (!row?.id) continue;
       if (!resultMap.has(row.id)) resultMap.set(row.id, row);
     }
   };
-
+ 
   // Tier 1 — exact product name
   addRows(rows.filter((r) => normalizeSimpleText(r.product_name) === cleanKw));
-
+ 
   // Tier 2 — exact in category/description/normalized_content
   addRows(
     rows.filter((r) => {
@@ -362,21 +387,21 @@ export async function searchProductPrices(
         safeText((r as ProductPriceRow & { description?: string }).description),
         safeText((r as ProductPriceRow & { normalized_content?: string }).normalized_content),
       ];
-
+ 
       return fields.some((field) => normalizeSimpleText(field) === cleanKw);
     })
   );
-
+ 
   // Tier 3 — starts with
   addRows(
     rows.filter((r) => normalizeSimpleText(r.product_name).startsWith(cleanKw))
   );
-
+ 
   // Tier 4 — contains full string
   addRows(
     rows.filter((r) => normalizeSimpleText(r.product_name).includes(cleanKw))
   );
-
+ 
   // Tier 5 — all words must match
   {
     const words = splitKeywords(cleanKw).filter((w) => w.length >= 2);
@@ -393,13 +418,13 @@ export async function searchProductPrices(
               .filter(Boolean)
               .join(" ")
           );
-
+ 
           return words.every((w) => haystack.includes(w));
         })
       );
     }
   }
-
+ 
   // Tier 6 — fuzzy fallback
   if (resultMap.size < RESULT_LIMIT) {
     const fuzzy = fuzzyRank<ProductPriceRow>(
@@ -417,10 +442,10 @@ export async function searchProductPrices(
       RESULT_LIMIT,
       true
     );
-
+ 
     addRows(fuzzy.map((entry) => entry.item));
   }
-
+ 
   // Tier 7 — DB fallback across more than product_name
   if (resultMap.size < RESULT_LIMIT) {
     const safeKw = escapeLike(cleanKw);
@@ -433,17 +458,17 @@ export async function searchProductPrices(
       )
       .order("created_at", { ascending: false })
       .limit(RESULT_LIMIT);
-
+ 
     if (fallbackError) {
       console.error("[PriceSearch] fallback error:", fallbackError);
     } else {
       addRows((fallback ?? []) as ProductPriceRow[]);
     }
   }
-
+ 
   return clampResults(sortByCreatedAtDesc(Array.from(resultMap.values())));
 }
-
+ 
 export async function fetchRecentPrices(
   userId: string
 ): Promise<ProductPriceRow[]> {
@@ -453,23 +478,23 @@ export async function fetchRecentPrices(
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(RECENT_LIMIT);
-
+ 
   if (error) {
     console.error("[PriceSearch] Recent prices error:", error);
     return [];
   }
-
+ 
   return (data ?? []) as ProductPriceRow[];
 }
-
+ 
 // ─── FILES ────────────────────────────────────────────────────
-
+ 
 export async function searchImages(
   userId: string,
   keyword: string
 ): Promise<FileRow[]> {
   const trimmedKeyword = (keyword ?? "").trim();
-
+ 
   if (!trimmedKeyword || trimmedKeyword.length < 2) {
     const { data, error } = await serverSupabase
       .from("images")
@@ -477,39 +502,42 @@ export async function searchImages(
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
       .limit(RESULT_LIMIT);
-
+ 
     if (error) {
       console.error("[FileSearch] Images error:", error);
       return [];
     }
-
+ 
     return (data ?? []) as FileRow[];
   }
-
+ 
   const normalizedKeyword = normalizeSimpleText(trimmedKeyword);
-
+  const words = splitKeywords(trimmedKeyword).filter((w) => w.length >= 2);
+  const isMultiWord = words.length > 1;
+ 
   const { data: strictPool, error: strictPoolError } = await serverSupabase
     .from("images")
     .select("*")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(CANDIDATE_POOL_LIMIT);
-
+ 
   if (strictPoolError) {
     console.error("[FileSearch] Images strict pool error:", strictPoolError);
     return [];
   }
-
+ 
   const pool = (strictPool ?? []) as FileRow[];
   const resultMap = new Map<string, FileRow>();
-
+ 
   const addRows = (items: FileRow[]) => {
     for (const row of items) {
       if (!row?.id) continue;
       if (!resultMap.has(row.id)) resultMap.set(row.id, row);
     }
   };
-
+ 
+  // Exact normalized match
   addRows(
     pool.filter((row) => {
       const fields = [
@@ -517,28 +545,45 @@ export async function searchImages(
         safeText(row.description),
         safeText((row as FileRow & { file_type?: string }).file_type),
       ];
-
+ 
       return fields.some((field) => normalizeSimpleText(field) === normalizedKeyword);
     })
   );
-
-  const safe = escapeLike(trimmedKeyword);
-  const { data, error } = await serverSupabase
-    .from("images")
-    .select("*")
-    .eq("user_id", userId)
-    .or(
-      `description.ilike.%${safe}%,file_name.ilike.%${safe}%,file_type.ilike.%${safe}%`
-    )
-    .order("created_at", { ascending: false })
-    .limit(RESULT_LIMIT);
-
-  if (error) {
-    console.error("[FileSearch] Images error:", error);
+ 
+  if (isMultiWord) {
+    // Multi-word: require ALL words in local pool (avoid DB OR which matches any word)
+    addRows(
+      pool.filter((row) => {
+        const haystack = normalizeSimpleText(
+          [
+            safeText(row.file_name),
+            safeText(row.description),
+            safeText((row as FileRow & { file_type?: string }).file_type),
+          ].join(" ")
+        );
+        return words.every((w) => haystack.includes(normalizeSimpleText(w)));
+      })
+    );
   } else {
-    addRows((data ?? []) as FileRow[]);
+    // Single-word: DB ilike is fine
+    const safe = escapeLike(trimmedKeyword);
+    const { data, error } = await serverSupabase
+      .from("images")
+      .select("*")
+      .eq("user_id", userId)
+      .or(
+        `description.ilike.%${safe}%,file_name.ilike.%${safe}%,file_type.ilike.%${safe}%`
+      )
+      .order("created_at", { ascending: false })
+      .limit(RESULT_LIMIT);
+ 
+    if (error) {
+      console.error("[FileSearch] Images error:", error);
+    } else {
+      addRows((data ?? []) as FileRow[]);
+    }
   }
-
+ 
   if (resultMap.size < RESULT_LIMIT) {
     const fuzzy = fuzzyRank<FileRow>(
       trimmedKeyword,
@@ -552,19 +597,19 @@ export async function searchImages(
       RESULT_LIMIT,
       true
     );
-
+ 
     addRows(fuzzy.map((entry) => entry.item));
   }
-
+ 
   return clampResults(sortByCreatedAtDesc(Array.from(resultMap.values())));
 }
-
+ 
 export async function searchDocuments(
   userId: string,
   keyword: string
 ): Promise<FileRow[]> {
   const trimmedKeyword = (keyword ?? "").trim();
-
+ 
   if (!trimmedKeyword || trimmedKeyword.length < 2) {
     const { data, error } = await serverSupabase
       .from("documents")
@@ -572,39 +617,42 @@ export async function searchDocuments(
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
       .limit(RESULT_LIMIT);
-
+ 
     if (error) {
       console.error("[FileSearch] Documents error:", error);
       return [];
     }
-
+ 
     return (data ?? []) as FileRow[];
   }
-
+ 
   const normalizedKeyword = normalizeSimpleText(trimmedKeyword);
-
+  const words = splitKeywords(trimmedKeyword).filter((w) => w.length >= 2);
+  const isMultiWord = words.length > 1;
+ 
   const { data: strictPool, error: strictPoolError } = await serverSupabase
     .from("documents")
     .select("*")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(CANDIDATE_POOL_LIMIT);
-
+ 
   if (strictPoolError) {
     console.error("[FileSearch] Documents strict pool error:", strictPoolError);
     return [];
   }
-
+ 
   const pool = (strictPool ?? []) as FileRow[];
   const resultMap = new Map<string, FileRow>();
-
+ 
   const addRows = (items: FileRow[]) => {
     for (const row of items) {
       if (!row?.id) continue;
       if (!resultMap.has(row.id)) resultMap.set(row.id, row);
     }
   };
-
+ 
+  // Exact normalized match
   addRows(
     pool.filter((row) => {
       const fields = [
@@ -612,28 +660,45 @@ export async function searchDocuments(
         safeText(row.description),
         safeText((row as FileRow & { file_type?: string }).file_type),
       ];
-
+ 
       return fields.some((field) => normalizeSimpleText(field) === normalizedKeyword);
     })
   );
-
-  const safe = escapeLike(trimmedKeyword);
-  const { data, error } = await serverSupabase
-    .from("documents")
-    .select("*")
-    .eq("user_id", userId)
-    .or(
-      `description.ilike.%${safe}%,file_name.ilike.%${safe}%,file_type.ilike.%${safe}%`
-    )
-    .order("created_at", { ascending: false })
-    .limit(RESULT_LIMIT);
-
-  if (error) {
-    console.error("[FileSearch] Documents error:", error);
+ 
+  if (isMultiWord) {
+    // Multi-word: require ALL words in local pool
+    addRows(
+      pool.filter((row) => {
+        const haystack = normalizeSimpleText(
+          [
+            safeText(row.file_name),
+            safeText(row.description),
+            safeText((row as FileRow & { file_type?: string }).file_type),
+          ].join(" ")
+        );
+        return words.every((w) => haystack.includes(normalizeSimpleText(w)));
+      })
+    );
   } else {
-    addRows((data ?? []) as FileRow[]);
+    // Single-word: DB ilike is fine
+    const safe = escapeLike(trimmedKeyword);
+    const { data, error } = await serverSupabase
+      .from("documents")
+      .select("*")
+      .eq("user_id", userId)
+      .or(
+        `description.ilike.%${safe}%,file_name.ilike.%${safe}%,file_type.ilike.%${safe}%`
+      )
+      .order("created_at", { ascending: false })
+      .limit(RESULT_LIMIT);
+ 
+    if (error) {
+      console.error("[FileSearch] Documents error:", error);
+    } else {
+      addRows((data ?? []) as FileRow[]);
+    }
   }
-
+ 
   if (resultMap.size < RESULT_LIMIT) {
     const fuzzy = fuzzyRank<FileRow>(
       trimmedKeyword,
@@ -647,13 +712,13 @@ export async function searchDocuments(
       RESULT_LIMIT,
       true
     );
-
+ 
     addRows(fuzzy.map((entry) => entry.item));
   }
-
+ 
   return clampResults(sortByCreatedAtDesc(Array.from(resultMap.values())));
 }
-
+ 
 export async function createSignedUrl(
   bucket: string,
   filePath: string
@@ -661,17 +726,17 @@ export async function createSignedUrl(
   const { data, error } = await serverSupabase.storage
     .from(bucket)
     .createSignedUrl(filePath, 3600);
-
+ 
   if (error) {
     console.error(`[FileSearch] Signed URL error ${bucket}/${filePath}:`, error);
     return null;
   }
-
+ 
   return data?.signedUrl ?? null;
 }
-
+ 
 // ─── SEARCH ALL ───────────────────────────────────────────────
-
+ 
 export interface SearchAllResult {
   notes: NoteRow[];
   prices: ProductPriceRow[];
@@ -679,7 +744,7 @@ export interface SearchAllResult {
   documents: FileRow[];
   hasResults: boolean;
 }
-
+ 
 export async function searchAllData(
   userId: string,
   keyword: string,
@@ -691,18 +756,18 @@ export async function searchAllData(
     searchImages(userId, keyword),
     searchDocuments(userId, keyword),
   ]);
-
+ 
   const finalNotes = clampResults(dedupeById(notes));
   const finalPrices = clampResults(dedupeById(prices));
   const finalImages = clampResults(dedupeById(images));
   const finalDocuments = clampResults(dedupeById(documents));
-
+ 
   const hasResults =
     finalNotes.length > 0 ||
     finalPrices.length > 0 ||
     finalImages.length > 0 ||
     finalDocuments.length > 0;
-
+ 
   return {
     notes: finalNotes,
     prices: finalPrices,
@@ -711,3 +776,4 @@ export async function searchAllData(
     hasResults,
   };
 }
+ 
