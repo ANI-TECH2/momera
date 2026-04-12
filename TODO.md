@@ -1,19 +1,13 @@
-# Fix Supabase Key Error - Task Progress
+# Fix AsyncStorage window error in Expo + Supabase
 
-## Plan Steps:
-- [x] Step 1: Create .env.local with Supabase env vars (placeholders added)
-- [x] Step 2: Update src/server/supabase.ts to use anon key  
-- [x] Step 3: Remove src/server/supabase-new.ts
-- [x] Step 4: Test with `expo start --clear --web` (run manually)
-- [x] Step 5: Complete!
+## Steps:
+- [x] 1. Create src/lib/storage.ts polyfill for AsyncStorage (RN/web/Node.js compatible)
+- [x] 2. Update src/server/supabase.ts to use dynamic storage from polyfill
+- [x] 3. Create metro.config.js with AsyncStorage web resolver alias
+- [ ] 4. Run `npx expo install @react-native-async-storage/async-storage` to ensure compatibility
+- [ ] 5. Test: `expo start --clear` (check no errors)
+- [ ] 6. Test web: `expo start --web` (if targeting web)
+- [x] Plan created and approved
 
-✅ **Task Complete!** The "supabaseKey is required" error is fixed.
-
-**Final Steps:**
-1. Update `.env.local` with your real Supabase URL and anon key
-2. Run: `expo start --clear --web`
-3. Verify no error, test login/chat
-
-See `TODO-supabase-env.md` for details.
-
+Current: Step 4 complete. Testing with expo start --clear.
 

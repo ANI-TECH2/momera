@@ -56,7 +56,10 @@ export default function TabsLayout() {
     return <Redirect href="/(auth)/login" />;
   }
 
-  const bottomPadding = Math.max(insets.bottom, Platform.OS === "ios" ? 10 : 8);
+  const bottomPadding = Math.max(
+    insets.bottom,
+    Platform.OS === "ios" ? 10 : 8
+  );
 
   return (
     <Tabs

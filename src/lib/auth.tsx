@@ -17,7 +17,7 @@ type AuthContextType = {
   session: Session | null;
   user: User | null;
   loading: boolean;
-  supabase: SupabaseClient | null;
+  supabase: SupabaseClient;
   signInWithEmail: (email: string, password: string) => Promise<void>;
   signUpWithEmail: (email: string, password: string) => Promise<void>;
   signInWithGoogle: () => Promise<void>;
@@ -27,69 +27,59 @@ type AuthContextType = {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [supabase, setSupabase] = useState<SupabaseClient | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Keep one stable client instance for the whole provider
+  const supabase = useMemo(() => createSupabaseClient(), []);
+
   useEffect(() => {
-    let mounted = true;
+    let isMounted = true;
 
-    const init = async () => {
+    const initializeAuth = async () => {
       try {
-        const client = createSupabaseClient();
-        if (!mounted) return;
-
-        setSupabase(client);
-
         const {
-          data: { session },
+          data: { session: currentSession },
           error,
-        } = await client.auth.getSession();
+        } = await supabase.auth.getSession();
 
         if (error) {
           console.error("[Auth] getSession error:", error);
         }
 
-        if (mounted) {
-          setSession(session ?? null);
-          setLoading(false);
-        }
+        if (!isMounted) return;
 
-        const {
-          data: { subscription },
-        } = client.auth.onAuthStateChange((_event, newSession) => {
-          if (!mounted) return;
-          setSession(newSession ?? null);
-          setLoading(false);
-        });
-
-        return subscription;
+        setSession(currentSession ?? null);
+        setLoading(false);
       } catch (error) {
-        console.error("[Auth] Failed to initialize Supabase client:", error);
-        if (mounted) {
-          setLoading(false);
-        }
-        return null;
+        console.error("[Auth] Failed to initialize auth:", error);
+
+        if (!isMounted) return;
+        setSession(null);
+        setLoading(false);
       }
     };
 
-    let authSubscription: { unsubscribe: () => void } | null = null;
+    initializeAuth();
 
-    init().then((sub) => {
-      authSubscription = sub;
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, newSession) => {
+      console.log("[Auth] onAuthStateChange:", event);
+
+      if (!isMounted) return;
+
+      setSession(newSession ?? null);
+      setLoading(false);
     });
 
     return () => {
-      mounted = false;
-      authSubscription?.unsubscribe();
+      isMounted = false;
+      subscription.unsubscribe();
     };
-  }, []);
+  }, [supabase]);
 
   const signInWithEmail = async (email: string, password: string) => {
-    if (!supabase) {
-      throw new Error("Supabase not ready");
-    }
-
     const cleanEmail = email.trim().toLowerCase();
 
     const { error } = await supabase.auth.signInWithPassword({
@@ -104,10 +94,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signUpWithEmail = async (email: string, password: string) => {
-    if (!supabase) {
-      throw new Error("Supabase not ready");
-    }
-
     const cleanEmail = email.trim().toLowerCase();
 
     const { error } = await supabase.auth.signUp({
@@ -122,10 +108,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signInWithGoogle = async () => {
-    if (!supabase) {
-      throw new Error("Supabase not ready");
-    }
-
     const redirectTo = Linking.createURL("/");
 
     const { data, error } = await supabase.auth.signInWithOAuth({
@@ -151,23 +133,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error("Google sign-in was cancelled or failed");
     }
 
-    const url = result.url;
-    const parsed = Linking.parse(url);
+    const parsed = Linking.parse(result.url);
 
-    const access_token =
+    const accessToken =
       typeof parsed.queryParams?.access_token === "string"
         ? parsed.queryParams.access_token
         : null;
 
-    const refresh_token =
+    const refreshToken =
       typeof parsed.queryParams?.refresh_token === "string"
         ? parsed.queryParams.refresh_token
         : null;
 
-    if (access_token && refresh_token) {
+    if (accessToken && refreshToken) {
       const { error: sessionError } = await supabase.auth.setSession({
-        access_token,
-        refresh_token,
+        access_token: accessToken,
+        refresh_token: refreshToken,
       });
 
       if (sessionError) {
@@ -178,18 +159,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
-    if (!supabase) {
-      throw new Error("Supabase not ready");
-    }
-
-    const { error } = await supabase.auth.signOut();
+    const { error } = await supabase.auth.signOut({
+      scope: "local",
+    });
 
     if (error) {
       console.error("[Auth] signOut error:", error);
       throw error;
     }
-
-    setSession(null);
   };
 
   const value = useMemo<AuthContextType>(

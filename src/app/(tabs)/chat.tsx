@@ -10,6 +10,8 @@ import {
   Platform,
   ActivityIndicator,
   StatusBar,
+  NativeSyntheticEvent,
+  TextInputContentSizeChangeEventData,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
@@ -27,6 +29,9 @@ const WELCOME_MESSAGE: ChatMessage = {
   createdAt: new Date().toISOString(),
 };
 
+const INPUT_MIN_HEIGHT = 46;
+const INPUT_MAX_HEIGHT = 160;
+
 export default function ChatScreen() {
   const { user, session } = useAuth();
   const userId = user?.id;
@@ -35,6 +40,8 @@ export default function ChatScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [inputHeight, setInputHeight] = useState(INPUT_MIN_HEIGHT);
+
   const flatListRef = useRef<FlatList<ChatMessage>>(null);
 
   useEffect(() => {
@@ -47,6 +54,22 @@ export default function ChatScreen() {
     requestAnimationFrame(() => {
       flatListRef.current?.scrollToEnd({ animated });
     });
+  };
+
+  const handleInputSizeChange = (
+    event: NativeSyntheticEvent<TextInputContentSizeChangeEventData>
+  ) => {
+    const nextHeight = Math.min(
+      INPUT_MAX_HEIGHT,
+      Math.max(INPUT_MIN_HEIGHT, Math.ceil(event.nativeEvent.contentSize.height))
+    );
+
+    setInputHeight(nextHeight);
+  };
+
+  const resetInputBox = () => {
+    setInput("");
+    setInputHeight(INPUT_MIN_HEIGHT);
   };
 
   const loadChatHistory = async () => {
@@ -112,7 +135,7 @@ export default function ChatScreen() {
     };
 
     setMessages((prev) => [...prev, userMessage]);
-    setInput("");
+    resetInputBox();
     setLoading(true);
 
     requestAnimationFrame(() => {
@@ -234,25 +257,29 @@ export default function ChatScreen() {
           >
             <View style={styles.inputBar}>
               <TextInput
-                style={styles.input}
+                style={[
+                  styles.input,
+                  {
+                    height: inputHeight,
+                  },
+                ]}
                 value={input}
                 onChangeText={setInput}
+                onContentSizeChange={handleInputSizeChange}
                 placeholder="Save or find something..."
                 placeholderTextColor={COLORS.textSecondary}
                 multiline
-                maxLength={1000}
-                returnKeyType="send"
+                scrollEnabled={inputHeight >= INPUT_MAX_HEIGHT}
+                maxLength={3000}
+                returnKeyType="default"
                 blurOnSubmit={false}
-                onSubmitEditing={() => {
-                  if (!loading && input.trim()) {
-                    sendMessage();
-                  }
-                }}
+                textAlignVertical="top"
               />
 
               <Pressable
                 style={[
                   styles.sendBtn,
+                  { height: Math.max(INPUT_MIN_HEIGHT, 46) },
                   (!input.trim() || loading) && styles.sendBtnDisabled,
                 ]}
                 onPress={sendMessage}
@@ -395,20 +422,19 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
     color: COLORS.text,
     fontSize: 15,
-    minHeight: 46,
-    maxHeight: 110,
+    minHeight: INPUT_MIN_HEIGHT,
+    maxHeight: INPUT_MAX_HEIGHT,
     borderWidth: 1,
     borderColor: COLORS.border,
-    textAlignVertical: "top",
   },
   sendBtn: {
     minWidth: 72,
-    height: 46,
     borderRadius: 23,
     backgroundColor: COLORS.primary,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 16,
+    marginBottom: 0,
   },
   sendBtnDisabled: {
     backgroundColor: COLORS.border,

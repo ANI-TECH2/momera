@@ -27,16 +27,14 @@ export default function SettingsScreen() {
   const [profileEditing, setProfileEditing] = useState(false);
   const [profileImageUri, setProfileImageUri] = useState<string | null>(null);
   const [savingProfile, setSavingProfile] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
 
+  // Replace this later with real usage from DB/storage if you want
   const storageUsed = 12 * 1024 * 1024;
-  const storagePercent = Math.min(
-    (storageUsed / FREE_STORAGE_LIMIT) * 100,
-    100
-  );
+  const storagePercent = Math.min((storageUsed / FREE_STORAGE_LIMIT) * 100, 100);
 
   const userMetadata = (user?.user_metadata as UserMetadata) || {};
-  const displayName =
-    userMetadata.full_name || user?.email?.split("@")[0] || "User";
+  const displayName = userMetadata.full_name || user?.email?.split("@")[0] || "User";
   const avatarUrl = userMetadata.avatar_url || null;
   const nameInitial = displayName.charAt(0).toUpperCase();
 
@@ -59,7 +57,7 @@ export default function SettingsScreen() {
   const openEditProfile = () => {
     setEditingName(displayName);
     setProfileImageUri(null);
-    setProfileEditing((prev) => !prev);
+    setProfileEditing(true);
   };
 
   const closeEditProfile = () => {
@@ -70,8 +68,7 @@ export default function SettingsScreen() {
 
   const pickProfileImage = async () => {
     try {
-      const permission =
-        await ImagePicker.requestMediaLibraryPermissionsAsync();
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
       if (!permission.granted) {
         Alert.alert("Permission needed", "Please allow photo library access.");
@@ -83,7 +80,6 @@ export default function SettingsScreen() {
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.8,
-        base64: true,
       });
 
       if (!result.canceled && result.assets?.[0]) {
@@ -151,10 +147,7 @@ export default function SettingsScreen() {
 
       if (profileImageUri) {
         const uploadedUrl = await uploadAvatar(profileImageUri);
-        if (!uploadedUrl) {
-          setSavingProfile(false);
-          return;
-        }
+        if (!uploadedUrl) return;
         newAvatarUrl = uploadedUrl;
       }
 
@@ -182,6 +175,7 @@ export default function SettingsScreen() {
     if (!user?.id) return;
 
     setExporting(true);
+
     try {
       const url = `${API_BASE}/api/export?userId=${user.id}`;
       const supported = await Linking.canOpenURL(url);
@@ -194,10 +188,7 @@ export default function SettingsScreen() {
       await Linking.openURL(url);
     } catch (error) {
       console.error("[Settings] handleExport error:", error);
-      Alert.alert(
-        "Export failed",
-        "Could not export your data. Please try again."
-      );
+      Alert.alert("Export failed", "Could not export your data. Please try again.");
     } finally {
       setExporting(false);
     }
@@ -220,15 +211,41 @@ export default function SettingsScreen() {
     );
   };
 
+  const handleLogout = () => {
+    Alert.alert("Log Out", "Are you sure you want to log out?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Log Out",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            setLoggingOut(true);
+
+            const { error } = await supabase.auth.signOut({
+              scope: "local",
+            });
+
+            if (error) throw error;
+
+            // No manual router.replace here.
+            // Let your auth listener / protected layout redirect automatically.
+          } catch (error: any) {
+            console.error("[Settings] logout error:", error);
+            Alert.alert("Logout failed", error?.message || "Could not log out.");
+            setLoggingOut(false);
+          }
+        },
+      },
+    ]);
+  };
+
   const SettingRow = ({
-    icon,
     title,
     subtitle,
     onPress,
     danger = false,
     right,
   }: {
-    icon: string;
     title: string;
     subtitle?: string;
     onPress?: () => void;
@@ -243,10 +260,6 @@ export default function SettingsScreen() {
       onPress={onPress}
       disabled={!onPress}
     >
-      <View style={styles.settingIconWrap}>
-        <Text style={styles.settingIcon}>{icon}</Text>
-      </View>
-
       <View style={styles.settingInfo}>
         <Text style={[styles.settingTitle, danger && styles.dangerText]}>
           {title}
@@ -260,10 +273,7 @@ export default function SettingsScreen() {
 
   if (authLoading) {
     return (
-      <SafeAreaView
-        style={styles.safe}
-        edges={["top", "left", "right", "bottom"]}
-      >
+      <SafeAreaView style={styles.safe} edges={["top", "left", "right", "bottom"]}>
         <StatusBar
           barStyle="light-content"
           backgroundColor={COLORS.background}
@@ -280,64 +290,57 @@ export default function SettingsScreen() {
   if (!user) return null;
 
   return (
-    <SafeAreaView
-      style={styles.safe}
-      edges={["top", "left", "right", "bottom"]}
-    >
+    <SafeAreaView style={styles.safe} edges={["top", "left", "right", "bottom"]}>
       <StatusBar
         barStyle="light-content"
         backgroundColor={COLORS.background}
         translucent={false}
       />
 
-      <View style={styles.header}>
-        <Text style={styles.headerEyebrow}>Account</Text>
-        <Text style={styles.headerTitle}>Settings</Text>
-        <Text style={styles.headerSubtitle}>
-          Manage your profile, storage and privacy
-        </Text>
-      </View>
-
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
-        <Pressable style={styles.profileCard} onPress={openEditProfile}>
-          <View style={styles.profileAvatar}>
-            {currentAvatar ? (
-              <Image
-                source={{ uri: currentAvatar }}
-                style={styles.profileAvatarImage}
-              />
-            ) : (
-              <Text style={styles.profileAvatarText}>{nameInitial}</Text>
-            )}
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Settings</Text>
+          <Text style={styles.headerSubtitle}>
+            Manage your account and private data
+          </Text>
+        </View>
+
+        <View style={styles.profileCard}>
+          <View style={styles.profileTop}>
+            <View style={styles.profileAvatar}>
+              {currentAvatar ? (
+                <Image source={{ uri: currentAvatar }} style={styles.profileAvatarImage} />
+              ) : (
+                <Text style={styles.profileAvatarText}>{nameInitial}</Text>
+              )}
+            </View>
+
+            <View style={styles.profileInfo}>
+              <Text style={styles.profileName} numberOfLines={1}>
+                {displayName}
+              </Text>
+              <Text style={styles.profileEmail} numberOfLines={1}>
+                {user.email}
+              </Text>
+            </View>
           </View>
 
-          <View style={styles.profileInfo}>
-            <Text style={styles.profileName} numberOfLines={1}>
-              {displayName}
-            </Text>
-            <Text style={styles.profilePlan} numberOfLines={1}>
-              Free Plan • {user.email}
-            </Text>
-          </View>
-
-          <View style={styles.editBadge}>
-            <Text style={styles.editBadgeText}>
-              {profileEditing ? "Close" : "Edit"}
-            </Text>
-          </View>
-        </Pressable>
+          <Pressable style={styles.editButton} onPress={openEditProfile}>
+            <Text style={styles.editButtonText}>Edit Profile</Text>
+          </Pressable>
+        </View>
 
         {profileEditing && (
-          <View style={styles.editProfileCard}>
-            <Text style={styles.editTitle}>Edit Profile</Text>
+          <View style={styles.editCard}>
+            <Text style={styles.cardTitle}>Edit Profile</Text>
 
-            <Text style={styles.editLabel}>Display Name</Text>
+            <Text style={styles.inputLabel}>Display Name</Text>
             <TextInput
-              style={styles.editNameInput}
+              style={styles.input}
               value={editingName}
               onChangeText={setEditingName}
               placeholder="Enter your name"
@@ -346,31 +349,26 @@ export default function SettingsScreen() {
               autoCapitalize="words"
             />
 
-            <Pressable style={styles.pickAvatarBtn} onPress={pickProfileImage}>
-              <Text style={styles.pickAvatarText}>
-                {profileImageUri
-                  ? "Photo selected — tap to change"
-                  : "Pick Profile Photo"}
+            <Pressable style={styles.secondaryButton} onPress={pickProfileImage}>
+              <Text style={styles.secondaryButtonText}>
+                {profileImageUri ? "Change Photo" : "Pick Profile Photo"}
               </Text>
             </Pressable>
 
-            <View style={styles.editButtons}>
-              <Pressable style={styles.cancelBtn} onPress={closeEditProfile}>
-                <Text style={styles.cancelBtnText}>Cancel</Text>
+            <View style={styles.actionRow}>
+              <Pressable style={styles.cancelButton} onPress={closeEditProfile}>
+                <Text style={styles.cancelButtonText}>Cancel</Text>
               </Pressable>
 
               <Pressable
-                style={[
-                  styles.saveBtn,
-                  savingProfile && styles.saveBtnDisabled,
-                ]}
+                style={[styles.primaryButton, savingProfile && styles.buttonDisabled]}
                 onPress={saveProfile}
                 disabled={savingProfile}
               >
                 {savingProfile ? (
                   <ActivityIndicator color="#FFFFFF" />
                 ) : (
-                  <Text style={styles.saveBtnText}>Save</Text>
+                  <Text style={styles.primaryButtonText}>Save</Text>
                 )}
               </Pressable>
             </View>
@@ -380,11 +378,9 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Storage</Text>
 
-          <View style={styles.storageCard}>
+          <View style={styles.card}>
             <View style={styles.storageTop}>
-              <Text style={styles.storageUsed}>
-                {formatSize(storageUsed)} used
-              </Text>
+              <Text style={styles.storageUsed}>{formatSize(storageUsed)} used</Text>
               <Text style={styles.storageLimit}>
                 of {formatSize(FREE_STORAGE_LIMIT)}
               </Text>
@@ -395,28 +391,23 @@ export default function SettingsScreen() {
                 style={[
                   styles.storageBarFill,
                   { width: `${storagePercent}%` },
-                  storagePercent > 80 && styles.storageBarWarning,
                 ]}
               />
             </View>
 
-            <View style={styles.storageBottom}>
-              <Text style={styles.storagePercentText}>
-                {storagePercent.toFixed(0)}% used
-              </Text>
-              <Text style={styles.storageNote}>Files stored privately</Text>
-            </View>
+            <Text style={styles.storageNote}>
+              Your uploaded files are stored privately.
+            </Text>
           </View>
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Your Data</Text>
+          <Text style={styles.sectionTitle}>Data</Text>
 
           <View style={styles.card}>
             <SettingRow
-              icon="⬇️"
               title="Download My Data"
-              subtitle="Export notes, files and chats as JSON"
+              subtitle="Export notes, files, and chats"
               onPress={handleExport}
               right={
                 exporting ? (
@@ -426,9 +417,8 @@ export default function SettingsScreen() {
             />
             <View style={styles.divider} />
             <SettingRow
-              icon="🗑️"
               title="Clear Chat History"
-              subtitle="Delete all chat messages now"
+              subtitle="Delete all chat messages"
               onPress={handleClearChat}
               danger
             />
@@ -436,35 +426,28 @@ export default function SettingsScreen() {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Privacy</Text>
+          <Text style={styles.sectionTitle}>Account</Text>
 
           <View style={styles.card}>
             <SettingRow
-              icon="🔒"
-              title="Auto-delete Chat"
-              subtitle="Chat messages clear every 24 hours"
-              right={<Text style={styles.badgeGreen}>ON</Text>}
-            />
-            <View style={styles.divider} />
-            <SettingRow
-              icon="🛡️"
               title="Private Storage"
-              subtitle="Files are stored privately, not visible in chat"
-              right={<Text style={styles.badgeGreen}>ON</Text>}
+              subtitle="Your files stay linked to your account"
+              right={<Text style={styles.statusText}>ON</Text>}
             />
           </View>
         </View>
 
-        <View style={styles.upgradeCard}>
-          <Text style={styles.upgradeTitle}>Upgrade to Pro 🚀</Text>
-          <Text style={styles.upgradeDesc}>
-            Get more storage, longer memory and priority features
-          </Text>
-
-          <Pressable style={styles.upgradeBtn}>
-            <Text style={styles.upgradeBtnText}>View Plans</Text>
-          </Pressable>
-        </View>
+        <Pressable
+          style={[styles.logoutButton, loggingOut && styles.buttonDisabled]}
+          onPress={handleLogout}
+          disabled={loggingOut}
+        >
+          {loggingOut ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <Text style={styles.logoutButtonText}>Log Out</Text>
+          )}
+        </Pressable>
 
         <View style={styles.appInfo}>
           <Text style={styles.appInfoText}>Memora v1.0.0</Text>
@@ -481,65 +464,59 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.background,
   },
 
+  scroll: {
+    flex: 1,
+  },
+
+  content: {
+    padding: 20,
+    paddingBottom: 40,
+  },
+
   loaderWrap: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 24,
-    gap: 12,
     backgroundColor: COLORS.background,
   },
+
   loaderText: {
     color: COLORS.textSecondary,
     fontSize: 14,
+    marginTop: 12,
   },
 
   header: {
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-    backgroundColor: COLORS.background,
-  },
-  headerEyebrow: {
-    color: COLORS.primary,
-    fontSize: 12,
-    fontWeight: "700",
-    textTransform: "uppercase",
-    letterSpacing: 1,
-    marginBottom: 4,
-  },
-  headerTitle: {
-    color: COLORS.text,
-    fontSize: 24,
-    fontWeight: "800",
-  },
-  headerSubtitle: {
-    color: COLORS.textSecondary,
-    fontSize: 13,
-    marginTop: 4,
+    marginBottom: 20,
   },
 
-  scroll: {
-    flex: 1,
+  headerTitle: {
+    color: COLORS.text,
+    fontSize: 28,
+    fontWeight: "800",
   },
-  content: {
-    padding: 20,
-    gap: 20,
-    paddingBottom: 48,
+
+  headerSubtitle: {
+    color: COLORS.textSecondary,
+    fontSize: 14,
+    marginTop: 4,
   },
 
   profileCard: {
     backgroundColor: COLORS.card,
     borderRadius: 20,
-    padding: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 14,
+    padding: 18,
     borderWidth: 1,
     borderColor: COLORS.border,
+    marginBottom: 16,
   },
+
+  profileTop: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+
   profileAvatar: {
     width: 58,
     height: 58,
@@ -548,63 +525,76 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
+    marginRight: 14,
   },
+
   profileAvatarImage: {
     width: "100%",
     height: "100%",
   },
+
   profileAvatarText: {
-    color: COLORS.text,
-    fontSize: 24,
+    color: "#FFFFFF",
+    fontSize: 22,
     fontWeight: "800",
   },
+
   profileInfo: {
     flex: 1,
   },
+
   profileName: {
     color: COLORS.text,
-    fontSize: 17,
-    fontWeight: "700",
-  },
-  profilePlan: {
-    color: COLORS.textSecondary,
-    fontSize: 12,
-    marginTop: 3,
-  },
-  editBadge: {
-    backgroundColor: COLORS.primary + "18",
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: COLORS.primary + "55",
-  },
-  editBadgeText: {
-    color: COLORS.primary,
-    fontSize: 12,
+    fontSize: 18,
     fontWeight: "700",
   },
 
-  editProfileCard: {
+  profileEmail: {
+    color: COLORS.textSecondary,
+    fontSize: 13,
+    marginTop: 4,
+  },
+
+  editButton: {
+    marginTop: 16,
+    backgroundColor: COLORS.background,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 14,
+    paddingVertical: 13,
+    alignItems: "center",
+  },
+
+  editButtonText: {
+    color: COLORS.text,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+
+  editCard: {
     backgroundColor: COLORS.card,
     borderRadius: 20,
-    padding: 16,
-    gap: 12,
+    padding: 18,
     borderWidth: 1,
-    borderColor: COLORS.primary + "66",
+    borderColor: COLORS.border,
+    marginBottom: 16,
   },
-  editTitle: {
+
+  cardTitle: {
     color: COLORS.text,
     fontSize: 17,
     fontWeight: "700",
-    marginBottom: 2,
+    marginBottom: 14,
   },
-  editLabel: {
+
+  inputLabel: {
     color: COLORS.textSecondary,
-    fontSize: 12,
-    fontWeight: "700",
+    fontSize: 13,
+    fontWeight: "600",
+    marginBottom: 8,
   },
-  editNameInput: {
+
+  input: {
     backgroundColor: COLORS.background,
     borderRadius: 14,
     paddingHorizontal: 14,
@@ -613,26 +603,31 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     borderWidth: 1,
     borderColor: COLORS.border,
+    marginBottom: 14,
   },
-  pickAvatarBtn: {
-    backgroundColor: COLORS.primary + "12",
+
+  secondaryButton: {
+    backgroundColor: COLORS.background,
     borderRadius: 14,
-    padding: 14,
+    paddingVertical: 14,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: COLORS.primary + "55",
+    borderColor: COLORS.border,
   },
-  pickAvatarText: {
-    color: COLORS.primary,
-    fontSize: 14,
+
+  secondaryButtonText: {
+    color: COLORS.text,
+    fontSize: 15,
     fontWeight: "700",
   },
-  editButtons: {
+
+  actionRow: {
     flexDirection: "row",
     gap: 12,
-    marginTop: 4,
+    marginTop: 14,
   },
-  cancelBtn: {
+
+  cancelButton: {
     flex: 1,
     backgroundColor: COLORS.background,
     borderRadius: 14,
@@ -641,37 +636,45 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  cancelBtnText: {
+
+  cancelButtonText: {
     color: COLORS.textSecondary,
     fontSize: 15,
     fontWeight: "700",
   },
-  saveBtn: {
+
+  primaryButton: {
     flex: 1,
     backgroundColor: COLORS.primary,
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: "center",
+    justifyContent: "center",
   },
-  saveBtnDisabled: {
-    opacity: 0.7,
-  },
-  saveBtnText: {
+
+  primaryButtonText: {
     color: "#FFFFFF",
     fontSize: 15,
     fontWeight: "800",
   },
 
-  section: {
-    gap: 10,
+  buttonDisabled: {
+    opacity: 0.7,
   },
+
+  section: {
+    marginTop: 6,
+    marginBottom: 16,
+  },
+
   sectionTitle: {
     color: COLORS.textSecondary,
     fontSize: 12,
     fontWeight: "700",
     textTransform: "uppercase",
     letterSpacing: 1,
-    paddingLeft: 4,
+    marginBottom: 10,
+    paddingLeft: 2,
   },
 
   card: {
@@ -680,153 +683,120 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     overflow: "hidden",
+    paddingVertical: 2,
   },
 
-  storageCard: {
-    backgroundColor: COLORS.card,
-    borderRadius: 20,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    gap: 12,
-  },
   storageTop: {
     flexDirection: "row",
     justifyContent: "space-between",
-    gap: 12,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    marginBottom: 12,
   },
+
   storageUsed: {
     color: COLORS.text,
     fontSize: 15,
     fontWeight: "700",
   },
+
   storageLimit: {
     color: COLORS.textSecondary,
     fontSize: 13,
   },
+
   storageBar: {
     height: 8,
     backgroundColor: COLORS.border,
     borderRadius: 999,
     overflow: "hidden",
+    marginHorizontal: 16,
   },
+
   storageBarFill: {
     height: "100%",
     backgroundColor: COLORS.primary,
     borderRadius: 999,
   },
-  storageBarWarning: {
-    backgroundColor: COLORS.warning,
-  },
-  storageBottom: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    gap: 12,
-  },
-  storagePercentText: {
-    color: COLORS.text,
-    fontSize: 12,
-    fontWeight: "700",
-  },
+
   storageNote: {
     color: COLORS.textSecondary,
     fontSize: 12,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 14,
   },
 
   settingRow: {
     flexDirection: "row",
     alignItems: "center",
-    padding: 16,
-    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
   },
+
   settingRowPressed: {
     opacity: 0.7,
   },
-  settingIconWrap: {
-    width: 34,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  settingIcon: {
-    fontSize: 19,
-  },
+
   settingInfo: {
     flex: 1,
   },
+
   settingTitle: {
     color: COLORS.text,
     fontSize: 15,
     fontWeight: "600",
   },
-  dangerText: {
-    color: COLORS.error,
-  },
+
   settingSubtitle: {
     color: COLORS.textSecondary,
     fontSize: 12,
-    marginTop: 3,
+    marginTop: 4,
     lineHeight: 17,
   },
+
+  dangerText: {
+    color: COLORS.error,
+  },
+
   chevron: {
     color: COLORS.textSecondary,
     fontSize: 22,
-    fontWeight: "500",
   },
+
   divider: {
     height: 1,
     backgroundColor: COLORS.border,
-    marginLeft: 62,
+    marginLeft: 16,
   },
 
-  badgeGreen: {
-    color: COLORS.success,
-    fontSize: 11,
+  statusText: {
+    color: COLORS.primary,
+    fontSize: 12,
     fontWeight: "800",
-    backgroundColor: COLORS.success + "18",
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    borderRadius: 999,
   },
 
-  upgradeCard: {
-    backgroundColor: COLORS.primary + "14",
-    borderRadius: 22,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: COLORS.primary + "55",
-    gap: 10,
+  logoutButton: {
+    backgroundColor: COLORS.error,
+    borderRadius: 16,
+    paddingVertical: 16,
     alignItems: "center",
+    justifyContent: "center",
+    marginTop: 8,
   },
-  upgradeTitle: {
-    color: COLORS.text,
-    fontSize: 19,
-    fontWeight: "800",
-  },
-  upgradeDesc: {
-    color: COLORS.textSecondary,
-    fontSize: 13,
-    textAlign: "center",
-    lineHeight: 19,
-    maxWidth: 280,
-  },
-  upgradeBtn: {
-    backgroundColor: COLORS.primary,
-    borderRadius: 14,
-    paddingHorizontal: 24,
-    paddingVertical: 13,
-    marginTop: 2,
-  },
-  upgradeBtnText: {
+
+  logoutButtonText: {
     color: "#FFFFFF",
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: "800",
   },
 
   appInfo: {
     alignItems: "center",
+    marginTop: 20,
     gap: 4,
-    paddingTop: 4,
   },
+
   appInfoText: {
     color: COLORS.textSecondary,
     fontSize: 11,
