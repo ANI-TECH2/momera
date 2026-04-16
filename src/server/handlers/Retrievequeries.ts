@@ -14,7 +14,7 @@ import {
   splitKeywords,
   buildFtsQuery,
 } from "@/server/handlers/Retrievehelpers";
-import { fuzzyRank, safeText } from "@/server/handlers/fuzzySearch";
+import { fuzzyRank, safeText, detectPotentialSpellingMistake } from "@/server/handlers/fuzzySearch";
  
 // ─────────────────────────────────────────────
 // Config
@@ -279,12 +279,17 @@ export async function searchNotes(
     }
   }
  
-  // Pass 7 — fuzzy fallback (only when no strong signal found)
+  // Pass 7 — fuzzy search (now more aggressive)
   {
     const current = sortByScoreThenDate(Array.from(scoreMap.values()));
-    const hasGoodNonFuzzy = current.some((row) => row.score >= 2);
- 
-    if (!hasGoodNonFuzzy && strictPoolRows.length > 0) {
+    const hasStrongMatches = current.some((row) => row.score >= 3); // Only very strong matches prevent fuzzy
+    const hasAnyMatches = current.length > 0;
+
+    // Use fuzzy search if:
+    // 1. No matches at all, OR
+    // 2. Only weak matches (score < 3), OR
+    // 3. We have room for more results
+    if (!hasStrongMatches && strictPoolRows.length > 0 && scoreMap.size < RESULT_LIMIT * 2) {
       const ranked = fuzzyRank<NoteRow>(
         trimmedKeyword,
         strictPoolRows,
@@ -294,13 +299,15 @@ export async function searchNotes(
           safeText(note.category),
           safeText((note as NoteRow & { normalized_content?: string }).normalized_content),
         ],
-        0.74,
+        0.65, // Lower threshold for better matching
         RESULT_LIMIT,
-        true
+        false // Allow fuzzy results even with exact matches
       );
- 
+
       for (const entry of ranked) {
-        addResults([entry.item], 0.5 + entry.score);
+        // Give fuzzy matches a base score but preserve ranking
+        const fuzzyScore = 0.3 + (entry.score * 0.7); // 0.3-1.0 range
+        addResults([entry.item], fuzzyScore);
       }
     }
   }
@@ -425,25 +432,31 @@ export async function searchProductPrices(
     }
   }
  
-  // Tier 6 — fuzzy fallback
-  if (resultMap.size < RESULT_LIMIT) {
-    const fuzzy = fuzzyRank<ProductPriceRow>(
-      cleanKw,
-      rows,
-      (row) => [
-        safeText(row.product_name),
-        safeText(row.category),
-        safeText((row as ProductPriceRow & { description?: string }).description),
-        safeText(
-          (row as ProductPriceRow & { normalized_content?: string }).normalized_content
-        ),
-      ],
-      0.76,
-      RESULT_LIMIT,
-      true
-    );
- 
-    addRows(fuzzy.map((entry) => entry.item));
+  // Tier 6 — fuzzy search (more aggressive)
+  {
+    const currentSize = resultMap.size;
+    const needsMore = currentSize < RESULT_LIMIT;
+
+    // Always try fuzzy search if we need more results or if this might be a spelling mistake
+    if ((needsMore || detectPotentialSpellingMistake(cleanKw)) && rows.length > 0) {
+      const fuzzy = fuzzyRank<ProductPriceRow>(
+        cleanKw,
+        rows,
+        (row) => [
+          safeText(row.product_name),
+          safeText(row.category),
+          safeText((row as ProductPriceRow & { description?: string }).description),
+          safeText(
+            (row as ProductPriceRow & { normalized_content?: string }).normalized_content
+          ),
+        ],
+        0.65, // Lower threshold
+        RESULT_LIMIT,
+        false // Allow fuzzy even with exact matches
+      );
+
+      addRows(fuzzy.map((entry) => entry.item));
+    }
   }
  
   // Tier 7 — DB fallback across more than product_name
@@ -584,7 +597,7 @@ export async function searchImages(
     }
   }
  
-  if (resultMap.size < RESULT_LIMIT) {
+  if (resultMap.size < RESULT_LIMIT * 2) { // More aggressive - allow up to 2x limit
     const fuzzy = fuzzyRank<FileRow>(
       trimmedKeyword,
       pool,
@@ -593,17 +606,17 @@ export async function searchImages(
         safeText(row.description),
         safeText((row as FileRow & { file_type?: string }).file_type),
       ],
-      0.73,
+      0.65, // Lower threshold
       RESULT_LIMIT,
-      true
+      false // Allow fuzzy even with exact matches
     );
- 
+
     addRows(fuzzy.map((entry) => entry.item));
   }
- 
+
   return clampResults(sortByCreatedAtDesc(Array.from(resultMap.values())));
 }
- 
+
 export async function searchDocuments(
   userId: string,
   keyword: string
@@ -699,7 +712,7 @@ export async function searchDocuments(
     }
   }
  
-  if (resultMap.size < RESULT_LIMIT) {
+  if (resultMap.size < RESULT_LIMIT * 2) { // More aggressive - allow up to 2x limit
     const fuzzy = fuzzyRank<FileRow>(
       trimmedKeyword,
       pool,
@@ -708,17 +721,17 @@ export async function searchDocuments(
         safeText(row.description),
         safeText((row as FileRow & { file_type?: string }).file_type),
       ],
-      0.73,
+      0.65, // Lower threshold
       RESULT_LIMIT,
-      true
+      false // Allow fuzzy even with exact matches
     );
- 
+
     addRows(fuzzy.map((entry) => entry.item));
   }
- 
+
   return clampResults(sortByCreatedAtDesc(Array.from(resultMap.values())));
 }
- 
+
 export async function createSignedUrl(
   bucket: string,
   filePath: string

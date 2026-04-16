@@ -18,6 +18,7 @@ import { COLORS } from "@/lib/constants";
 export default function Signup() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loadingType, setLoadingType] = useState<"email" | "google" | null>(null);
 
   const { signUpWithEmail, signInWithGoogle, loading: authLoading } = useAuth();
@@ -98,6 +99,7 @@ export default function Signup() {
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Join Memora</Text>
 
+          {/* EMAIL */}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Email</Text>
             <TextInput
@@ -113,21 +115,32 @@ export default function Signup() {
             />
           </View>
 
+          {/* PASSWORD */}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Password</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Create a password (6+ chars)"
-              placeholderTextColor={COLORS.textSecondary}
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-              autoCapitalize="none"
-              autoCorrect={false}
-              editable={!isLoading}
-            />
+
+            <View style={styles.passwordContainer}>
+              <TextInput
+                style={styles.passwordInput}
+                placeholder="Create a password (6+ chars)"
+                placeholderTextColor={COLORS.textSecondary}
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry={!showPassword}
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!isLoading}
+              />
+
+              <Pressable style={styles.passwordToggle} onPress={() => setShowPassword((prev) => !prev)}>
+                <Text style={styles.passwordToggleText}>
+                  {showPassword ? "Hide" : "Show"}
+                </Text>
+              </Pressable>
+            </View>
           </View>
 
+          {/* SIGNUP BUTTON */}
           <Pressable
             style={({ pressed }) => [
               styles.primaryButton,
@@ -144,12 +157,14 @@ export default function Signup() {
             )}
           </Pressable>
 
+          {/* DIVIDER */}
           <View style={styles.dividerRow}>
             <View style={styles.divider} />
             <Text style={styles.dividerText}>or</Text>
             <View style={styles.divider} />
           </View>
 
+          {/* GOOGLE */}
           <Pressable
             style={({ pressed }) => [
               styles.googleButton,
@@ -171,6 +186,7 @@ export default function Signup() {
           </Text>
         </View>
 
+        {/* LOGIN LINK */}
         <Pressable
           onPress={() => router.push("/(auth)/login")}
           disabled={isLoading}
@@ -259,6 +275,39 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     backgroundColor: COLORS.background,
   },
+
+  /* PASSWORD FIXED */
+  passwordContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    backgroundColor: COLORS.background,
+    minHeight: 56,
+  },
+  passwordInput: {
+    flex: 1,
+    paddingVertical: 15,
+    paddingHorizontal: 0,
+    fontSize: 16,
+    color: COLORS.text,
+    backgroundColor: "transparent",
+  },
+  passwordToggle: {
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: COLORS.card,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  passwordToggleText: {
+    color: COLORS.primary,
+    fontWeight: "700",
+  },
+
   primaryButton: {
     backgroundColor: COLORS.primary,
     paddingVertical: 16,
@@ -286,7 +335,6 @@ const styles = StyleSheet.create({
     marginHorizontal: 12,
     color: COLORS.textSecondary,
     fontSize: 13,
-    fontWeight: "500",
   },
   googleButton: {
     borderWidth: 1,
@@ -306,16 +354,15 @@ const styles = StyleSheet.create({
     marginTop: 16,
     color: COLORS.textSecondary,
     fontSize: 13,
-    lineHeight: 20,
     textAlign: "center",
   },
   footerLinkWrap: {
     alignItems: "center",
+    marginTop: 20,
   },
   link: {
     color: COLORS.textSecondary,
     fontSize: 15,
-    textAlign: "center",
   },
   linkStrong: {
     color: COLORS.primary,
@@ -332,7 +379,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     backgroundColor: COLORS.background,
-    paddingHorizontal: 24,
   },
   loadingText: {
     color: COLORS.text,

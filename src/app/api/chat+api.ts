@@ -1,6 +1,8 @@
 import { getNlp } from "@/server/nlp/setup";
 import { handleSave } from "@/server/handlers/save";
 import { handleRetrieve } from "@/server/handlers/retrieve";
+import { handleDelete } from "@/server/handlers/deleteHandler";
+import { handleList } from "@/server/handlers/userdataview";
 import { serverSupabase } from "@/server/supabase";
 
 const INTENT_THRESHOLD = 0.62;
@@ -10,6 +12,8 @@ type AppIntent =
   | "intent.save"
   | "intent.retrieve"
   | "intent.delete"
+  | "intent.list"
+  | "intent.delete_confirm"   // user is confirming a pending ambiguous delete
   | "intent.greet"
   | "intent.help"
   | "intent.none";
@@ -32,6 +36,16 @@ type ChatResponsePayload = {
   type: "assistant" | "system";
   message: string;
   [key: string]: any;
+};
+
+// ─── PENDING DELETE STATE ─────────────────────────────────────────────────────
+// When a delete returns multiple matches, we store them in chat_context so the
+// next message can confirm which one to delete by number or name.
+
+type PendingDeleteMatch = {
+  id: string;
+  label: string;
+  table: string;
 };
 
 // ───────────────────────────────────────────────────────────────
@@ -88,6 +102,22 @@ function safeText(value: unknown): string {
 function detectIntentFast(message: string): AppIntent | null {
   const lower = normalizeLoose(message);
 
+  // ── Delete FIRST — must run before save so "delete pepper" is never
+  //    misrouted to intent.save by overlapping NLP training data ────────────
+  const DELETE_TRIGGERS = [
+    /^delete\s+.+/i,
+    /^remove\s+(my\s+)?.+/i,
+    /^clear\s+(my\s+)?.+/i,
+    /^erase\s+(my\s+)?.+/i,
+    /^drop\s+(my\s+)?.+/i,
+    /^get\s+rid\s+of\s+.+/i,
+    /^wipe\s+(my\s+)?.+/i,
+  ];
+  if (DELETE_TRIGGERS.some((pattern) => pattern.test(lower))) {
+    return "intent.delete";
+  }
+
+  // ── Save ──────────────────────────────────────────────────────
   const SAVE_TRIGGERS = [
     /^save\s+.+/i,
     /^remember\s+.+/i,
@@ -99,19 +129,21 @@ function detectIntentFast(message: string): AppIntent | null {
     /^remember\s+this\s+.+/i,
     /^store\s+this\s+.+/i,
   ];
-
+  // Block save if message contains any delete verb anywhere — belt-and-suspenders
+  // guard so NLP scoring can never route a delete message into save
   const SAVE_BLOCKLIST = [
-    "save me", "save us", "save him",
-    "save her", "save them", "save money", "savings",
+    "save me", "save us", "save him", "save her", "save them", "save money", "savings",
   ];
-
+  const DELETE_VERBS = /\b(delete|remove|clear|erase|drop|wipe|get rid of)\b/i;
   if (
     !SAVE_BLOCKLIST.some((item) => lower.includes(item)) &&
+    !DELETE_VERBS.test(lower) &&
     SAVE_TRIGGERS.some((pattern) => pattern.test(lower))
   ) {
     return "intent.save";
   }
 
+  // ── Retrieve ──────────────────────────────────────────────────
   const RETRIEVE_TRIGGERS = [
     /^show\s+my\s+.+/i,
     /^show\s+me\s+my\s+.+/i,
@@ -125,28 +157,15 @@ function detectIntentFast(message: string): AppIntent | null {
     /^do\s+i\s+have\s+.+/i,
     /^look\s+up\s+.+/i,
   ];
-
-  // ✅ Removed bare /^find\s+.+/i — too loose, caused false retrieves
-
   if (RETRIEVE_TRIGGERS.some((pattern) => pattern.test(lower))) {
     return "intent.retrieve";
   }
 
-  const DELETE_TRIGGERS = [
-    /^delete\s+.+/i,
-    /^remove\s+my\s+.+/i,
-    /^clear\s+my\s+.+/i,
-  ];
-
-  if (DELETE_TRIGGERS.some((pattern) => pattern.test(lower))) {
-    return "intent.delete";
-  }
-
+  // ── Greet ─────────────────────────────────────────────────────
   const GREET_EXACT = [
     "hi", "hello", "hey", "hiya", "howdy",
     "good morning", "good afternoon", "good evening",
   ];
-
   if (
     GREET_EXACT.includes(lower) ||
     /^(hi|hey|hello)\s*[!,.]?\s*$/i.test(lower)
@@ -154,6 +173,7 @@ function detectIntentFast(message: string): AppIntent | null {
     return "intent.greet";
   }
 
+  // ── Help ──────────────────────────────────────────────────────
   const HELP_TRIGGERS = [
     /\bhelp\b/i,
     /what can you do/i,
@@ -162,10 +182,45 @@ function detectIntentFast(message: string): AppIntent | null {
     /what are your features/i,
     /what commands/i,
   ];
-
   if (HELP_TRIGGERS.some((pattern) => pattern.test(lower))) {
     return "intent.help";
   }
+
+  return null;
+}
+
+// ───────────────────────────────────────────────────────────────
+// PENDING DELETE CONFIRMATION DETECTION
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * When we have pending delete matches saved in context, check if the user's
+ * next message is a confirmation: a number ("1", "2"), or the item name.
+ */
+function resolveDeleteConfirmation(
+  message: string,
+  pendingMatches: PendingDeleteMatch[]
+): PendingDeleteMatch | null {
+  const lower = normalizeLoose(message);
+
+  // Number selection: "1", "2", "#1", "the first one", etc.
+  const numMatch = lower.match(/^#?(\d+)$/) || lower.match(/\b(first|second|third|fourth|fifth)\b/);
+  if (numMatch) {
+    const wordToNum: Record<string, number> = {
+      first: 1, second: 2, third: 3, fourth: 4, fifth: 5,
+    };
+    const idx =
+      wordToNum[numMatch[1]] !== undefined
+        ? wordToNum[numMatch[1]] - 1
+        : parseInt(numMatch[1], 10) - 1;
+    if (idx >= 0 && idx < pendingMatches.length) return pendingMatches[idx];
+  }
+
+  // Name match: user types part of the label
+  const byName = pendingMatches.find((m) =>
+    m.label.toLowerCase().includes(lower) || lower.includes(m.label.toLowerCase().slice(0, 10))
+  );
+  if (byName) return byName;
 
   return null;
 }
@@ -213,11 +268,10 @@ function extractEntitiesHeuristic(message: string): ExtractedEntity[] {
 
   const stopWords = new Set([
     "save", "remember", "store", "keep", "find", "show", "get",
-    "retrieve", "search", "delete", "remove", "clear", "help",
-    "what", "my", "this", "that", "from", "about", "note",
+    "retrieve", "search", "delete", "remove", "clear", "erase", "drop", "wipe",
+    "help", "what", "my", "this", "that", "from", "about", "note",
     "password", "number", "contact",
   ]);
-
   const wordMatches = text.match(/\b[A-Za-z][a-z]{2,}\b/g) ?? [];
   for (const word of wordMatches) {
     if (!stopWords.has(word.toLowerCase())) pushMatch("name_like", word);
@@ -242,8 +296,10 @@ function normalizeNlpEntities(rawEntities: any[]): ExtractedEntity[] {
         if (!entity || !sourceText) return null;
         return {
           entity, sourceText, value,
-          accuracy: typeof item?.accuracy === "number" ? item.accuracy
-            : typeof item?.score === "number" ? item.score : 0.85,
+          accuracy:
+            typeof item?.accuracy === "number" ? item.accuracy
+            : typeof item?.score === "number" ? item.score
+            : 0.85,
         };
       })
       .filter(Boolean) as ExtractedEntity[]
@@ -252,19 +308,16 @@ function normalizeNlpEntities(rawEntities: any[]): ExtractedEntity[] {
 
 function inferIntentFromEntities(message: string, entities: ExtractedEntity[]): AppIntent | null {
   const lower = normalizeLoose(message);
-
-  const hasContent =
-    entities.some((e) =>
-      ["phone", "email", "money", "date_like", "place", "keyword"].includes(e.entity)
-    );
-
-  // ✅ Only infer from strong entities — not name_like alone (too loose)
+  const hasContent = entities.some((e) =>
+    ["phone", "email", "money", "date_like", "place", "keyword"].includes(e.entity)
+  );
   if (!hasContent) return null;
 
-  if (/\b(delete|remove|clear)\b/i.test(lower)) return "intent.delete";
+  // Delete must be checked before save — same reason as fast intent
+  if (/\b(delete|remove|clear|erase|drop|wipe)\b/i.test(lower)) return "intent.delete";
   if (/\b(show|find|get|retrieve|search|lookup|look up|where|what)\b/i.test(lower)) return "intent.retrieve";
-  if (/\b(save|remember|store|keep|note)\b/i.test(lower)) return "intent.save";
-
+  // Only infer save if no delete verb is present
+  if (/\b(save|remember|store|keep|note)\b/i.test(lower) && !/\b(delete|remove|clear|erase|drop|wipe)\b/i.test(lower)) return "intent.save";
   return null;
 }
 
@@ -280,7 +333,6 @@ Here are examples I understand well:
 💾 **Save something**
 → *Save my password is 1234*
 → *Remember John number 08031234567*
-→ *Store my rent note for next week*
 
 🔍 **Find something**
 → *Show my notes*
@@ -288,31 +340,35 @@ Here are examples I understand well:
 → *What is my password?*
 
 🗑️ **Delete something**
-→ *Delete my note about passwords*
+→ *Delete my note about pepper*
+→ *Remove John from contacts*
+→ *Delete rice price*
+→ *Clear all my notes*
 
 ❓ **Help**
 → *help*`;
 }
 
 function buildGreetingMessage(): string {
-  return `Hello! 👋 I'm Momera, your personal memory assistant.
+  return `Hello! 👋 I'm Memora, your personal memory assistant.
 
 You can ask me to:
 - 💾 Save notes: *"Save my password is 1234"*
 - 🔍 Find saved info: *"Show my notes"*
-- 🗑️ Delete notes: *"Delete my password note"*
+- 🗑️ Delete items: *"Delete my pepper price"*
 
 Type *help* to see more examples.`;
 }
 
 // ───────────────────────────────────────────────────────────────
-// CONTEXT SAVING
+// CONTEXT SAVING / LOADING
 // ───────────────────────────────────────────────────────────────
 async function saveLastQueryContext(
   userId: string,
   message: string,
   intent: string,
-  entities: ExtractedEntity[]
+  entities: ExtractedEntity[],
+  pendingDeleteMatches?: PendingDeleteMatch[]
 ): Promise<void> {
   try {
     await serverSupabase.from("chat_context").upsert(
@@ -321,12 +377,41 @@ async function saveLastQueryContext(
         last_message: message,
         last_intent: intent,
         last_entities: entities,
+        pending_delete_matches: pendingDeleteMatches ?? null,
         updated_at: new Date().toISOString(),
       },
       { onConflict: "user_id" }
     );
   } catch (error) {
     console.warn("[Chat API] Failed to save context:", error);
+  }
+}
+
+async function loadPendingDeleteMatches(
+  userId: string
+): Promise<PendingDeleteMatch[] | null> {
+  try {
+    const { data } = await serverSupabase
+      .from("chat_context")
+      .select("pending_delete_matches")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (!data?.pending_delete_matches) return null;
+    return data.pending_delete_matches as PendingDeleteMatch[];
+  } catch {
+    return null;
+  }
+}
+
+async function clearPendingDeleteMatches(userId: string): Promise<void> {
+  try {
+    await serverSupabase
+      .from("chat_context")
+      .update({ pending_delete_matches: null })
+      .eq("user_id", userId);
+  } catch {
+    // best effort
   }
 }
 
@@ -393,14 +478,46 @@ export async function POST(req: Request) {
 
     console.log(`[Chat API] User: ${userId} | Message: "${message}"`);
 
+    // ── Check for pending delete confirmation FIRST ─────────────────────────
+    // If the user previously got an ambiguous delete result, their next message
+    // might be a number or name to confirm which item to delete.
+    const pendingMatches = await loadPendingDeleteMatches(userId);
+    if (pendingMatches && pendingMatches.length > 0) {
+      const confirmed = resolveDeleteConfirmation(message, pendingMatches);
+
+      if (confirmed) {
+        // Clear pending state immediately
+        await clearPendingDeleteMatches(userId);
+
+        // Import deleteRecord from deleteHandler via inline call
+        // We re-use handleDelete with a precise ID-based message
+        const res = await handleDelete(
+          `delete id:${confirmed.id} table:${confirmed.table}`,
+          userId,
+          []
+        );
+        const data = await res.json();
+        // Patch message to be friendly since we're confirming
+        if (data.type === "assistant" && data.deleted_id) {
+          return Response.json({
+            ...data,
+            message: `🗑️ Done! *"${confirmed.label}"* has been deleted.`,
+          });
+        }
+        return Response.json(data);
+      }
+
+      // User said something unrelated — treat as a fresh message, clear pending
+      await clearPendingDeleteMatches(userId);
+    }
+
+    // ── Normal intent detection ─────────────────────────────────────────────
     const detection = await detectIntent(message);
 
     console.log(
-      `[Chat API] Intent source=${detection.source} intent=${detection.intent ?? "null"} score=${detection.score.toFixed(2)}`
+      `[Chat API] source=${detection.source} intent=${detection.intent ?? "null"} score=${detection.score.toFixed(2)}`
     );
     console.log("[Chat API] Entities:", detection.entities);
-
-    let responseData: ChatResponsePayload;
 
     if (!detection.intent) {
       return Response.json({ type: "assistant", message: getGuidanceMessage(message) });
@@ -408,28 +525,47 @@ export async function POST(req: Request) {
 
     await saveLastQueryContext(userId, message, detection.intent, detection.entities);
 
-    // ✅ KEY FIX: Pass message string + entities directly — NOT a Request object
+    // ── Save ──────────────────────────────────────────────────────────────────
     if (detection.intent === "intent.save") {
       const res = await handleSave(message, userId, detection.entities);
-      responseData = await res.json();
-      return Response.json(responseData);
+      const data = await res.json();
+      return Response.json(data);
     }
 
+    // ── Retrieve ──────────────────────────────────────────────────────────────
     if (detection.intent === "intent.retrieve") {
       const res = await handleRetrieve(message, userId, detection.entities);
-      responseData = await res.json();
-      return Response.json(responseData);
+      const data = await res.json();
+      return Response.json(data);
     }
 
+    // ── Delete ────────────────────────────────────────────────────────────────
     if (detection.intent === "intent.delete") {
-      return Response.json({
-        type: "assistant",
-        message: '🗑️ To delete something, please say exactly what to remove.\n\nExample: *"Delete my note about passwords"*',
-        intent: detection.intent,
-        entities: detection.entities,
-      });
+      const res = await handleDelete(message, userId, detection.entities);
+      const data: ChatResponsePayload = await res.json();
+
+      // If multiple matches found, persist them for the next confirmation turn
+      if (data.awaiting_confirmation && Array.isArray(data.matches)) {
+        await saveLastQueryContext(
+          userId,
+          message,
+          detection.intent,
+          detection.entities,
+          data.matches as PendingDeleteMatch[]
+        );
+      }
+
+      return Response.json(data);
     }
 
+    // ── List / View All ──────────────────────────────────────────────────────
+    if (detection.intent === "intent.list") {
+      const res = await handleList(message, userId, detection.entities);
+      const data = await res.json();
+      return Response.json(data);
+    }
+
+    // ── Greet ─────────────────────────────────────────────────────────────────
     if (detection.intent === "intent.greet") {
       return Response.json({
         type: "assistant",
@@ -438,6 +574,7 @@ export async function POST(req: Request) {
       });
     }
 
+    // ── Help ──────────────────────────────────────────────────────────────────
     if (detection.intent === "intent.help") {
       return Response.json({
         type: "assistant",

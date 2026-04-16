@@ -159,14 +159,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
-    const { error } = await supabase.auth.signOut({
-      scope: "local",
-    });
+    setLoading(true);
+
+    const { error } = await supabase.auth.signOut();
 
     if (error) {
       console.error("[Auth] signOut error:", error);
+      setLoading(false);
       throw error;
     }
+
+    setSession(null);
+    setLoading(false);
   };
 
   const value = useMemo<AuthContextType>(

@@ -1,13 +1,11 @@
-# Fix AsyncStorage window error in Expo + Supabase
+# Memora Price Checking API Implementation
+Current: Step 0/7 - Plan approved
 
-## Steps:
-- [x] 1. Create src/lib/storage.ts polyfill for AsyncStorage (RN/web/Node.js compatible)
-- [x] 2. Update src/server/supabase.ts to use dynamic storage from polyfill
-- [x] 3. Create metro.config.js with AsyncStorage web resolver alias
-- [ ] 4. Run `npx expo install @react-native-async-storage/async-storage` to ensure compatibility
-- [ ] 5. Test: `expo start --clear` (check no errors)
-- [ ] 6. Test web: `expo start --web` (if targeting web)
-- [x] Plan created and approved
-
-Current: Step 4 complete. Testing with expo start --clear.
-
+- [ ] 1. Sign up Serper.dev → Get API key (.env)
+- [ ] 2. Install axios: npx expo install axios
+- [ ] 3. Create src/app/api/price-check+api.ts
+- [ ] 4. Update src/server/handlers/retrieve.ts → Call price-check on price intent
+- [ ] 5. Update src/app/api/chat+api.ts → Route to retrieve with live check
+- [ ] 6. Update types.ts → Add live_prices to Note
+- [ ] 7. Test: Chat "show coke price" → Saved + live results
+- [ ] 8. Complete TODO → Ready for production!

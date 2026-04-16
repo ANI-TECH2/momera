@@ -190,13 +190,37 @@ function bestTextSimilarity(query: string, texts: string[]): number {
 // Public API
 // ─────────────────────────────────────────────
 
+// ─────────────────────────────────────────────
+// Spelling mistake detection
+// ─────────────────────────────────────────────
+
+function detectPotentialSpellingMistake(query: string): boolean {
+  const normalized = normalizeForFuzzy(query);
+  if (normalized.length < 3) return false;
+
+  // Common spelling mistake patterns
+  const hasRepeatedLetters = /(.)\1{2,}/.test(normalized); // aaa, bbb, etc.
+  const hasUnusualCombinations = /[qxz]{2,}|[jv]{3,}|[ckq]{2,}/.test(normalized); // unlikely letter combinations
+  const hasShortWords = normalized.split(/\s+/).some(word => word.length === 1 && !['a', 'i'].includes(word));
+
+  return hasRepeatedLetters || hasUnusualCombinations || hasShortWords;
+}
+
+// ─────────────────────────────────────────────
+// Optimized fuzzy ranking
+// ─────────────────────────────────────────────
+
+// ─────────────────────────────────────────────
+// Optimized fuzzy ranking with early exit and caching
+// ─────────────────────────────────────────────
+
 export function fuzzyRank<T>(
   query: string,
   items: T[],
   getTexts: (item: T) => string[],
-  minScore = 0.72,
+  minScore = 0.65, // Lower threshold for better matching
   limit = 5,
-  exactOnlyIfFound = true
+  exactOnlyIfFound = false // Changed to false - allow fuzzy even with exact matches
 ): FuzzyCandidate<T>[] {
   const trimmedQuery = (query ?? "").trim();
   if (!trimmedQuery) {
@@ -207,39 +231,76 @@ export function fuzzyRank<T>(
   const safeLimit = Math.max(1, Math.floor(limit));
   const safeMinScore = Math.max(0, Math.min(1, minScore));
 
-  fuzzyLog("query:", trimmedQuery);
+  // Detect if this might be a spelling mistake
+  const isPotentialSpellingMistake = detectPotentialSpellingMistake(trimmedQuery);
+
+  // If potential spelling mistake, lower threshold and be more aggressive
+  const effectiveMinScore = isPotentialSpellingMistake ? Math.max(0.5, safeMinScore - 0.1) : safeMinScore;
+
+  fuzzyLog("query:", trimmedQuery, "potential spelling mistake:", isPotentialSpellingMistake);
   fuzzyLog("normalized query:", normalizeForFuzzy(trimmedQuery));
   fuzzyLog("items count:", items.length);
-  fuzzyLog("minScore:", safeMinScore, "limit:", safeLimit);
+  fuzzyLog("effective minScore:", effectiveMinScore, "limit:", safeLimit);
 
-  const ranked: RankedEntry<T>[] = items
-    .map((item, index) => {
-      const texts = getTexts(item).map((text) => safeText(text));
-      const score = bestTextSimilarity(trimmedQuery, texts);
-      const exactTextMatch = hasExactTextMatch(trimmedQuery, texts);
-      const exactWordMatch = hasExactWordMatch(trimmedQuery, texts);
+  // Pre-normalize query for performance
+  const normalizedQuery = normalizeForFuzzy(trimmedQuery);
+  const queryWords = splitKeywords(normalizedQuery).filter(w => w.length >= 2);
+
+  const ranked: RankedEntry<T>[] = [];
+  let exactMatchesFound = 0;
+
+  // Process items with early exit optimization
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const texts = getTexts(item).map((text) => safeText(text));
+
+    // Quick pre-filter: check if any text contains the query (fast check)
+    const hasAnyMatch = texts.some(text =>
+      normalizeForFuzzy(text).includes(normalizedQuery) ||
+      queryWords.some(word => normalizeForFuzzy(text).includes(word))
+    );
+
+    // Skip items that don't have any basic match (unless it's a potential spelling mistake)
+    if (!hasAnyMatch && !isPotentialSpellingMistake && items.length > 50) {
+      continue;
+    }
+
+    const score = bestTextSimilarity(trimmedQuery, texts);
+    const exactTextMatch = hasExactTextMatch(trimmedQuery, texts);
+    const exactWordMatch = hasExactWordMatch(trimmedQuery, texts);
+
+    if (exactTextMatch) exactMatchesFound++;
+
+    // Only keep items that meet the minimum score
+    if (score >= effectiveMinScore) {
+      ranked.push({
+        item,
+        score,
+        exactTextMatch,
+        exactWordMatch,
+      });
 
       if (FUZZY_DEBUG) {
-        fuzzyLog(`item ${index + 1}:`, {
+        fuzzyLog(`item ${i + 1}:`, {
           texts,
           score: Number(score.toFixed(4)),
           exactTextMatch,
           exactWordMatch,
         });
       }
+    }
 
-      return {
-        item,
-        score,
-        exactTextMatch,
-        exactWordMatch,
-      };
-    })
-    .filter((entry) => entry.score >= safeMinScore);
+    // Early exit if we have enough exact matches and exactOnlyIfFound is true
+    if (exactOnlyIfFound && !isPotentialSpellingMistake && exactMatchesFound >= safeLimit) {
+      break;
+    }
+  }
 
   fuzzyLog("ranked above minScore:", ranked.length);
 
-  if (exactOnlyIfFound) {
+  // If exactOnlyIfFound is true AND we have exact matches, only return those
+  // But if it's a potential spelling mistake, ignore this restriction
+  if (exactOnlyIfFound && !isPotentialSpellingMistake) {
     const exactTextMatches = ranked.filter((entry) => entry.exactTextMatch);
 
     if (exactTextMatches.length > 0) {
@@ -249,7 +310,7 @@ export function fuzzyRank<T>(
         .map(({ item, score }) => ({ item, score }));
 
       fuzzyLog(
-        "exact text matches found:",
+        "exact text matches found (exactOnlyIfFound=true):",
         finalExact.map((entry) => Number(entry.score.toFixed(4)))
       );
 
@@ -259,6 +320,7 @@ export function fuzzyRank<T>(
 
   const finalResults = ranked
     .sort((a, b) => {
+      // Prioritize exact matches, then word matches, then score
       if (a.exactTextMatch !== b.exactTextMatch) {
         return a.exactTextMatch ? -1 : 1;
       }

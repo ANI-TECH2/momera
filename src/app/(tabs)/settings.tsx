@@ -15,13 +15,15 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
+import { useRouter } from "expo-router";
 
 import { useAuth } from "@/lib/auth";
 import type { UserMetadata } from "@/lib/types";
 import { COLORS, API_BASE, FREE_STORAGE_LIMIT } from "@/lib/constants";
 
 export default function SettingsScreen() {
-  const { user, supabase, loading: authLoading } = useAuth();
+  const { user, supabase, signOut, loading: authLoading } = useAuth();
+  const router = useRouter();
 
   const [exporting, setExporting] = useState(false);
   const [profileEditing, setProfileEditing] = useState(false);
@@ -211,32 +213,18 @@ export default function SettingsScreen() {
     );
   };
 
-  const handleLogout = () => {
-    Alert.alert("Log Out", "Are you sure you want to log out?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Log Out",
-        style: "destructive",
-        onPress: async () => {
-          try {
-            setLoggingOut(true);
+  const handleLogout = async () => {
+    if (loggingOut) return;
 
-            const { error } = await supabase.auth.signOut({
-              scope: "local",
-            });
-
-            if (error) throw error;
-
-            // No manual router.replace here.
-            // Let your auth listener / protected layout redirect automatically.
-          } catch (error: any) {
-            console.error("[Settings] logout error:", error);
-            Alert.alert("Logout failed", error?.message || "Could not log out.");
-            setLoggingOut(false);
-          }
-        },
-      },
-    ]);
+    try {
+      setLoggingOut(true);
+      await signOut();
+      router.replace("/(auth)/login");
+    } catch (error: any) {
+      console.error("[Settings] logout error:", error);
+      Alert.alert("Logout failed", error?.message || "Could not log out.");
+      setLoggingOut(false);
+    }
   };
 
   const SettingRow = ({
@@ -440,7 +428,6 @@ export default function SettingsScreen() {
         <Pressable
           style={[styles.logoutButton, loggingOut && styles.buttonDisabled]}
           onPress={handleLogout}
-          disabled={loggingOut}
         >
           {loggingOut ? (
             <ActivityIndicator color="#FFFFFF" />

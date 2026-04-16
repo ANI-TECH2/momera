@@ -22,15 +22,14 @@ type ProductPriceItem = {
 
 type ReplyContext = {
   userName?: string | null;
-  countryCode?: string | null; // e.g. NG, US, UK, GH
+  countryCode?: string | null;
   now?: Date;
 };
 
-// ─── UTILS ────────────────────────────────────────────────────
+// ─── UTILS ────────────────────────────────────────────────────────────────────
 
 function timeAgo(dateStr: string | null | undefined): string {
   if (!dateStr) return "";
-
   const time = new Date(dateStr).getTime();
   if (Number.isNaN(time)) return "";
 
@@ -48,7 +47,6 @@ function timeAgo(dateStr: string | null | undefined): string {
     const weeks = Math.floor(days / 7);
     return `${weeks} week${weeks !== 1 ? "s" : ""} ago`;
   }
-
   const months = Math.floor(days / 30);
   return `${months} month${months !== 1 ? "s" : ""} ago`;
 }
@@ -67,7 +65,6 @@ function formatCurrency(price: number, currency = "NGN"): string {
     KES: "KSh",
     ZAR: "R",
   };
-
   const symbol = symbolMap[currency] || currency;
   return `${symbol}${price.toLocaleString()}`;
 }
@@ -88,21 +85,15 @@ function getDisplayName(userName?: string | null): string {
 
 function getCountryGreetingFlavor(countryCode?: string | null): string {
   const code = (countryCode || "").trim().toUpperCase();
-
   switch (code) {
-    case "NG":
-      return "Hope you're doing well.";
-    case "GH":
-      return "You're welcome.";
-    case "KE":
-      return "Glad to help.";
+    case "NG": return "Hope you're doing well.";
+    case "GH": return "You're welcome.";
+    case "KE": return "Glad to help.";
     case "US":
     case "UK":
     case "CA":
-    case "AU":
-      return "How can I help today?";
-    default:
-      return "What can I help you with today?";
+    case "AU": return "How can I help today?";
+    default: return "What can I help you with today?";
   }
 }
 
@@ -113,30 +104,23 @@ function buildGreetingReply(context?: ReplyContext): string {
   const flavor = getCountryGreetingFlavor(context?.countryCode);
 
   const greeting =
-    period === "morning"
-      ? "Good morning"
-      : period === "afternoon"
-      ? "Good afternoon"
-      : "Good evening";
+    period === "morning" ? "Good morning"
+    : period === "afternoon" ? "Good afternoon"
+    : "Good evening";
 
-  if (userName) {
-    return `${greeting}, ${userName}! I’m Memora. ${flavor}`;
-  }
-
-  return `${greeting}! I’m Memora. ${flavor}`;
+  return userName
+    ? `${greeting}, ${userName}! I'm Memora. ${flavor}`
+    : `${greeting}! I'm Memora. ${flavor}`;
 }
 
-// ─── GREETING DETECTION ───────────────────────────────────────
+// ─── GREETING DETECTION ───────────────────────────────────────────────────────
 
 function isGreeting(message: string): boolean {
   const q = message.trim().toLowerCase();
-
-  return /^(hi|hello|hey|yo|sup|good morning|good afternoon|good evening|morning|afternoon|evening)\b/.test(
-    q
-  );
+  return /^(hi|hello|hey|yo|sup|good morning|good afternoon|good evening|morning|afternoon|evening)\b/.test(q);
 }
 
-// ─── EXTRACTORS ───────────────────────────────────────────────
+// ─── EXTRACTORS ───────────────────────────────────────────────────────────────
 
 export function extractPhone(text: string): string | null {
   const match = text.match(/(?:\+?\d[\d\s\-]{7,}\d)/);
@@ -171,7 +155,6 @@ function detectQuestion(message: string): {
   wantsLocation: boolean;
 } {
   const q = message.toLowerCase();
-
   return {
     isAsking:
       /^(what|who|where|when|how|is|are|do|did|can|show|find|get|tell|give)/.test(q) ||
@@ -185,7 +168,7 @@ function detectQuestion(message: string): {
   };
 }
 
-// ─── PRICE REPLY ──────────────────────────────────────────────
+// ─── PRICE REPLY ──────────────────────────────────────────────────────────────
 
 export function buildPriceReply(
   userMessage: string,
@@ -201,13 +184,13 @@ export function buildPriceReply(
   const whenStr = when ? ` _(saved ${when})_` : "";
 
   if (prices.length === 1) {
-    const intros = [
-      `💰 *${best.product_name}* is ${formatted}${whenStr}`,
-      `The price of *${best.product_name}* is ${formatted}${whenStr}`,
-      `*${best.product_name}* — ${formatted}${whenStr}`,
+    const replies = [
+      `💰 *${best.product_name}* — ${formatted}${whenStr}`,
+      `The last price you saved for *${best.product_name}* is ${formatted}${whenStr}`,
+      `*${best.product_name}* is going for ${formatted}${whenStr}`,
     ];
 
-    let reply = pickRandom(intros);
+    let reply = pickRandom(replies);
 
     if (best.category && best.category !== "product") {
       reply += `\n_Category: ${best.category}_`;
@@ -219,14 +202,11 @@ export function buildPriceReply(
   const list = prices
     .map(
       (p, i) =>
-        `${i + 1}. *${p.product_name}* — ${formatCurrency(
-          p.price,
-          p.currency ?? "NGN"
-        )}`
+        `${i + 1}. *${p.product_name}* — ${formatCurrency(p.price, p.currency ?? "NGN")}`
     )
     .join("\n");
 
-  return `💰 Found ${prices.length} price matches:\n\n${list}\n\n_Say the product name to get more details._`;
+  return `💰 Found *${prices.length} price matches*:\n\n${list}\n\n_Tap a name or ask for a specific one._`;
 }
 
 function buildPriceNotFoundReply(userMessage: string): string {
@@ -236,10 +216,10 @@ function buildPriceNotFoundReply(userMessage: string): string {
     .replace(/[?.,!]/g, "")
     .trim();
 
-  return `No saved price found for *"${keyword}"*.\n\nTo save it, say:\n_"Save ${keyword} price 500"_`;
+  return `I don't have a saved price for *"${keyword}"* yet.\n\nTo save it, say:\n_"Save ${keyword} price 500"_`;
 }
 
-// ─── SAVE REPLY ───────────────────────────────────────────────
+// ─── SAVE REPLY ───────────────────────────────────────────────────────────────
 
 export function buildSaveReply(
   category: string,
@@ -253,85 +233,139 @@ export function buildSaveReply(
   const userName = getDisplayName(context?.userName);
 
   if (cat === "contact") {
-    if (name && phone) return `✅ Saved *${name}* — ${phone}`;
+    if (name && phone) return `✅ Got it! Saved *${name}* with number ${phone}.`;
     if (name && email) return `✅ Saved *${name}* — ${email}`;
-    if (name) return `✅ *${name}* saved to contacts`;
-    return `✅ Contact saved`;
+    if (name) return `✅ *${name}* added to your contacts.`;
+    return `✅ Contact saved.`;
   }
 
   if (cat === "idea") {
-    const ideas = [
-      `💡 Idea noted${userName ? `, ${userName}` : ""}! I'll keep that safe.`,
-      `💡 Got it${userName ? `, ${userName}` : ""} — idea saved.`,
-      `💡 Nice idea${userName ? `, ${userName}` : ""}! Saved.`,
+    const replies = [
+      `💡 Idea saved${userName ? `, ${userName}` : ""}! I'll keep it safe for you.`,
+      `💡 Noted${userName ? `, ${userName}` : ""}! That's a good one.`,
+      `💡 I've got your idea. Come back to it anytime.`,
     ];
-    return pickRandom(ideas);
+    return pickRandom(replies);
   }
 
   if (cat === "reminder") {
-    const reminders = [
-      `🔔 Reminder set${userName ? `, ${userName}` : ""}! I'll keep that for you.`,
-      `🔔 Got it${userName ? `, ${userName}` : ""} — reminder saved.`,
-      `🔔 Reminder saved.`,
+    const replies = [
+      `🔔 Reminder saved! I'll hold onto that for you.`,
+      `🔔 Got it${userName ? `, ${userName}` : ""}! Reminder noted.`,
+      `🔔 Done — I'll keep that reminder for you.`,
     ];
-    return pickRandom(reminders);
+    return pickRandom(replies);
   }
 
   if (cat === "receipt") {
-    return `🧾 Receipt saved. You can retrieve it anytime.`;
+    return `🧾 Receipt saved. You can pull it up anytime.`;
   }
 
-  if (cat === "password" || cat === "credential") {
-    return `🔐 Saved securely.`;
+  if (cat === "password" || cat === "credential" || cat === "secure_note") {
+    return `🔐 Saved securely. Only you can access this.`;
   }
 
-  const previews = content.slice(0, 50);
-  const noteReplies = [
-    `✅ Saved: _"${previews}${content.length > 50 ? "..." : ""}"_`,
-    `✅ Got it${userName ? `, ${userName}` : ""}! Saved.`,
-    `✅ Done — I'll remember that.`,
-    `✅ Saved for you.`,
+  const preview = content.slice(0, 60);
+  const ellipsis = content.length > 60 ? "…" : "";
+  const replies = [
+    `✅ Saved: _"${preview}${ellipsis}"_`,
+    `✅ Got it${userName ? `, ${userName}` : ""}! I'll remember that.`,
+    `✅ Done — saved for you.`,
+    `✅ All good! That's been saved.`,
   ];
 
-  return pickRandom(noteReplies);
+  return pickRandom(replies);
 }
 
-// ─── CONTACT REPLY ────────────────────────────────────────────
+// ─── NOTE REPLY ───────────────────────────────────────────────────────────────
+
+function buildNoteReply(
+  userMessage: string,
+  item: BaseSavedItem,
+  context?: ReplyContext
+): string {
+  const content = item.content ?? "";
+  const savedAt = item.created_at;
+  const when = timeAgo(savedAt);
+  const whenStr = when ? `\n\n_Saved ${when}_` : "";
+  const userName = getDisplayName(context?.userName);
+  const q = detectQuestion(userMessage);
+
+  // If user is asking for a specific field, answer precisely
+  if (q.wantsPhone) {
+    const phone = extractPhone(content);
+    const name = extractName(content);
+    if (phone) {
+      return `📱 ${name ? `*${name}*'s number is ` : "Here it is: "}${phone}${whenStr}`;
+    }
+  }
+
+  if (q.wantsEmail) {
+    const email = extractEmail(content);
+    const name = extractName(content);
+    if (email) {
+      return `📧 ${name ? `*${name}*'s email is ` : "Here it is: "}${email}${whenStr}`;
+    }
+  }
+
+  // Short content — show it plainly with some warmth
+  if (content.length <= 80) {
+    const intros = [
+      `Here's what you saved${userName ? `, ${userName}` : ""}:`,
+      `Found it! Here you go:`,
+      `Got it right here:`,
+    ];
+    return `📝 ${pickRandom(intros)}\n\n*${content}*${whenStr}`;
+  }
+
+  // Longer content
+  const intros = [
+    `Here's the note I found:`,
+    `Found it! Here's what you saved:`,
+    `Here's what you've got saved:`,
+  ];
+  return `📝 ${pickRandom(intros)}\n\n${content}${whenStr}`;
+}
+
+// ─── CONTACT REPLY ────────────────────────────────────────────────────────────
 
 function buildContactReply(
-  question: string,
+  userMessage: string,
   content: string,
   savedAt?: string | null
 ): string {
-  const q = detectQuestion(question);
+  const q = detectQuestion(userMessage);
   const name = extractName(content);
   const phone = extractPhone(content);
   const email = extractEmail(content);
   const when = timeAgo(savedAt);
-  const whenStr = when ? ` _(saved ${when})_` : "";
+  const whenStr = when ? `\n\n_Saved ${when}_` : "";
 
   if (q.wantsPhone && phone) {
-    return `📱 ${name ? `*${name}*: ` : ""}${phone}${whenStr}`;
+    return `📱 ${name ? `*${name}*'s number is ` : ""}${phone}${whenStr}`;
   }
 
   if (q.wantsEmail && email) {
-    return `📧 ${name ? `*${name}*: ` : ""}${email}${whenStr}`;
+    return `📧 ${name ? `*${name}*'s email is ` : ""}${email}${whenStr}`;
   }
 
-  if (q.wantsName && name) {
-    return `👤 *${name}*${phone ? `\n📱 ${phone}` : ""}${email ? `\n📧 ${email}` : ""}${whenStr}`;
-  }
-
+  // Full contact card
   const parts: string[] = [];
   if (name) parts.push(`👤 *${name}*`);
   if (phone) parts.push(`📱 ${phone}`);
   if (email) parts.push(`📧 ${email}`);
   if (!parts.length) parts.push(`📝 ${content}`);
 
-  return parts.join("\n") + whenStr;
+  const intros = [
+    `Here's the contact you saved:`,
+    `Found them! Here's the info:`,
+    `Got it — here's what you saved:`,
+  ];
+
+  return `${pickRandom(intros)}\n\n${parts.join("\n")}${whenStr}`;
 }
 
-// ─── FILE REPLY ───────────────────────────────────────────────
+// ─── FILE REPLY ───────────────────────────────────────────────────────────────
 
 function buildFileReply(
   item: BaseSavedItem,
@@ -345,17 +379,16 @@ function buildFileReply(
 
   const desc = item.description ? `\n_${item.description}_` : "";
   const emoji = itemType === "image" ? "🖼️" : "📄";
+  const label = itemType === "image" ? "images" : "files";
 
   if (total > 1) {
-    return `${emoji} Found *${total} ${
-      itemType === "image" ? "images" : "files"
-    }*.\n\nMost recent: *${name}*${desc}\n\nTap to open.`;
+    return `${emoji} Found *${total} ${label}*.\n\nMost recent: *${name}*${desc}\n\nTap to open.`;
   }
 
-  return `${emoji} *${name}*${desc}\n\nTap to open.`;
+  return `${emoji} Here's your ${itemType}: *${name}*${desc}\n\nTap to open.`;
 }
 
-// ─── MULTIPLE RESULTS ─────────────────────────────────────────
+// ─── MULTIPLE RESULTS ─────────────────────────────────────────────────────────
 
 function buildMultipleReply(items: BaseSavedItem[], userMessage: string): string {
   const q = detectQuestion(userMessage);
@@ -374,26 +407,22 @@ function buildMultipleReply(items: BaseSavedItem[], userMessage: string): string
     .join("\n");
 
   const intros = [
-    `Found *${items.length} matches*:`,
-    `Here are *${items.length} results*:`,
-    `I found *${items.length} items*:`,
+    `I found *${items.length} matches* — here are the top ones:`,
+    `Got *${items.length} results* for that. Here's a look:`,
+    `Found *${items.length} items*:`,
   ];
 
   return `${pickRandom(intros)}\n\n${list}\n\n_Be more specific to narrow it down._`;
 }
 
-// ─── NOT FOUND ────────────────────────────────────────────────
+// ─── NOT FOUND ────────────────────────────────────────────────────────────────
 
-function buildNotFoundReply(
-  userMessage: string,
-  context?: ReplyContext
-): string {
+function buildNotFoundReply(userMessage: string, context?: ReplyContext): string {
   if (isGreeting(userMessage)) {
     return buildGreetingReply(context);
   }
 
   const q = detectQuestion(userMessage);
-
   const keyword = userMessage
     .toLowerCase()
     .replace(/^(show|find|get|what is|who is|give me|tell me|search for)\s+/i, "")
@@ -402,23 +431,23 @@ function buildNotFoundReply(
     .trim();
 
   if (q.wantsPhone) {
-    return `Couldn't find a phone number for *"${keyword}"*.\n\nTo save it:\n_"Save ${keyword} 08012345678"_`;
+    return `I couldn't find a phone number for *"${keyword}"*.\n\nTo save it, say:\n_"Save ${keyword} 08012345678"_`;
   }
 
   if (q.wantsPrice) {
-    return `No saved price for *"${keyword}"*.\n\nTo save it:\n_"Save ${keyword} price 500"_`;
+    return `No saved price found for *"${keyword}"*.\n\nTo save it, say:\n_"Save ${keyword} price 500"_`;
   }
 
-  const notFoundReplies = [
-    `Nothing saved matching *"${keyword}"* yet.\n\nTry saving it first — just say _"Save ${keyword}..."_`,
-    `I don't have anything for *"${keyword}"*.\n\nYou can save it by saying _"Save ${keyword}..."_`,
-    `No results for *"${keyword}"*.\n\nWant to save something? Say _"Save ${keyword}..."_`,
+  const replies = [
+    `I don't have anything saved for *"${keyword}"* yet.\n\nWant to save it? Just say _"Save ${keyword}…"_`,
+    `Nothing matching *"${keyword}"* in your notes.\n\nYou can save it by saying _"Save ${keyword}…"_`,
+    `Hmm, I couldn't find *"${keyword}"*.\n\nTry saving it first — say _"Save ${keyword}…"_`,
   ];
 
-  return pickRandom(notFoundReplies);
+  return pickRandom(replies);
 }
 
-// ─── MAIN REPLY BUILDER ───────────────────────────────────────
+// ─── MAIN REPLY BUILDER ───────────────────────────────────────────────────────
 
 export function buildSmartReply(
   userMessage: string,
@@ -426,7 +455,6 @@ export function buildSmartReply(
   itemType: ItemType = "note",
   context?: ReplyContext
 ): string {
-  // greetings first
   if (isGreeting(userMessage)) {
     return buildGreetingReply(context);
   }
@@ -456,44 +484,51 @@ export function buildSmartReply(
 
   if (category === "idea") {
     const when = timeAgo(savedAt);
-    return `💡 *Your idea${when ? ` (${when})` : ""}:*\n\n"${content}"`;
+    const intros = [
+      `Here's your idea${when ? ` (saved ${when})` : ""}:`,
+      `Found it! Here's the idea you saved:`,
+    ];
+    return `💡 ${pickRandom(intros)}\n\n"${content}"`;
   }
 
   if (category === "reminder") {
     const when = timeAgo(savedAt);
-    return `🔔 *Reminder${when ? ` (saved ${when})` : ""}:*\n\n"${content}"`;
+    const intros = [
+      `Here's your reminder${when ? ` (saved ${when})` : ""}:`,
+      `Found your reminder:`,
+    ];
+    return `🔔 ${pickRandom(intros)}\n\n"${content}"`;
   }
 
   if (category === "receipt") {
-    return `🧾 *Receipt:*\n\n${content}`;
+    return `🧾 *Receipt found:*\n\n${content}`;
   }
 
-  if (category === "password" || category === "credential") {
+  if (category === "password" || category === "credential" || category === "secure_note") {
     return `🔐 *Saved info:*\n\n${content}`;
   }
 
   if (q.wantsPhone) {
     const phone = extractPhone(content);
     const name = extractName(content);
-    if (phone) return `📱 ${name ? `*${name}*: ` : ""}${phone}`;
+    if (phone) return `📱 ${name ? `*${name}*'s number: ` : ""}${phone}`;
   }
 
   if (q.wantsEmail) {
     const email = extractEmail(content);
     const name = extractName(content);
-    if (email) return `📧 ${name ? `*${name}*: ` : ""}${email}`;
+    if (email) return `📧 ${name ? `*${name}*'s email: ` : ""}${email}`;
   }
 
   if (q.wantsPrice) {
     return buildPriceReply(userMessage, []);
   }
 
-  const when = timeAgo(savedAt);
-  const whenStr = when ? `\n\n_Saved ${when}_` : "";
-  return `📝 ${content}${whenStr}`;
+  // Default: general note reply
+  return buildNoteReply(userMessage, first, context);
 }
 
-// ─── BULK SAVE REPLY ──────────────────────────────────────────
+// ─── BULK SAVE REPLY ──────────────────────────────────────────────────────────
 
 export function buildBulkSaveReply(
   saved: { product_name: string; price: number }[],
@@ -505,8 +540,8 @@ export function buildBulkSaveReply(
 
   if (total === 0 && skipped.length === 0) {
     return (
-      `❌ Couldn't parse any prices.\n\n` +
-      `Make sure each item has a name and number:\n` +
+      `❌ I couldn't parse any prices from that.\n\n` +
+      `Make sure each item has a name and a number:\n` +
       `_"pepper 50"_\n_"garri 800"_\n_"rice 2500"_`
     );
   }
@@ -527,18 +562,14 @@ export function buildBulkSaveReply(
   }
 
   if (skipped.length > 0) {
-    reply += `\n\n⚠️ *Already saved (skipped):*\n${skipped
-      .map((s) => `• ${s}`)
-      .join("\n")}`;
+    reply += `\n\n⚠️ *Already saved (skipped):*\n${skipped.map((s) => `• ${s}`).join("\n")}`;
   }
 
   if (failed.length > 0) {
     reply +=
-      `\n\n❌ *Couldn't parse ${failed.length} item${
-        failed.length !== 1 ? "s" : ""
-      }:*\n` +
+      `\n\n❌ *Couldn't parse ${failed.length} item${failed.length !== 1 ? "s" : ""}:*\n` +
       `${failed.map((f) => `• ${f}`).join("\n")}\n` +
-      `_Make sure format is: name then number, e.g. "garri 500"_`;
+      `_Format: name then number — e.g. "garri 500"_`;
   }
 
   return reply;

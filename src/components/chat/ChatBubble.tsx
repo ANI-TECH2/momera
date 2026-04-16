@@ -8,8 +8,8 @@ import {
   Linking,
   Share,
 } from "react-native";
-import { ChatMessage } from "../../lib/types";
-import { COLORS } from "../../lib/constants";
+import { ChatMessage } from "@/lib/types";
+import { COLORS } from "@/lib/constants";
 import { useAuth } from "@/lib/auth";
 
 interface ChatBubbleProps {
@@ -276,8 +276,18 @@ export function ChatBubble({ message }: ChatBubbleProps) {
     }
 
     // ─── DEFAULT TEXT ──────────────────────────────────────
+    // Check if message contains table formatting (dividers, numbered lists, etc.)
+    const hasTableFormat = message.message?.includes("═") || 
+                          message.message?.includes("─") ||
+                          (message.message?.match(/^\s*\d{2}\./m) !== null);
+    
     return (
-      <Text style={isUser ? styles.userText : styles.assistantText}>
+      <Text 
+        style={[
+          isUser ? styles.userText : styles.assistantText,
+          hasTableFormat && styles.monospaceText
+        ]}
+      >
         {message.message}
       </Text>
     );
@@ -535,6 +545,11 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     fontSize: 15,
     lineHeight: 22,
+  },
+  monospaceText: {
+    fontFamily: "Menlo",
+    fontSize: 13,
+    lineHeight: 20,
   },
   successText: { color: COLORS.success ?? "#22c55e" },
   dimText: { color: COLORS.textSecondary },

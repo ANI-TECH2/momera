@@ -1,0 +1,45 @@
+import { NlpManager } from "node-nlp";
+
+export function addListIntent(manager: NlpManager): void {
+  const listDocs = [
+    "show all my notes",
+    "list all notes",
+    "show everything i saved",
+    "list all my contacts",
+    "show all contacts",
+    "list all prices",
+    "show all my prices",
+    "show all saved prices",
+    "list everything",
+    "show all my data",
+    "show all my files",
+    "list all documents",
+    "show all my images",
+    "list all my photos",
+    "show all uploaded files",
+    "show all my saved items",
+    "give me all my notes",
+    "show all",
+    "list all",
+    "see all my saves",
+    "what have i stored",
+    "show all ngn prices",
+    "show all dollar prices",
+    "list all usd prices",
+    "show all pound prices",
+    "list all gbp prices",
+    "show all euro prices",
+    "show all rupee prices",
+    "list all my currency prices",
+    "show prices grouped by currency",
+    "list all contacts by country",
+    "show my uk contacts",
+    "show my us contacts",
+    "list my nigeria contacts",
+    "show my india contacts",
+    "list international contacts",
+    "show my overseas contacts",
+  ];
+
+  listDocs.forEach(doc => manager.addDocument("en", doc, "intent.list"));
+}

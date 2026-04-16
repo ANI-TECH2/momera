@@ -18,6 +18,7 @@ import { COLORS } from "@/lib/constants";
 export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loadingType, setLoadingType] = useState<"email" | "google" | null>(null);
 
   const { signInWithEmail, signInWithGoogle, loading: authLoading } = useAuth();
@@ -110,17 +111,27 @@ export default function Login() {
 
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Password</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Enter your password"
-              placeholderTextColor={COLORS.textSecondary}
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-              autoCapitalize="none"
-              autoCorrect={false}
-              editable={!isLoading}
-            />
+            <View style={styles.passwordContainer}>
+              <TextInput
+                style={styles.passwordInput}
+                placeholder="Enter your password"
+                placeholderTextColor={COLORS.textSecondary}
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry={!showPassword}
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!isLoading}
+              />
+              <Pressable
+                style={styles.passwordToggle}
+                onPress={() => setShowPassword((prev) => !prev)}
+              >
+                <Text style={styles.passwordToggleText}>
+                  {showPassword ? "Hide" : "Show"}
+                </Text>
+              </Pressable>
+            </View>
           </View>
 
           <Pressable
@@ -164,17 +175,17 @@ export default function Login() {
           <Text style={styles.privacyText}>
             Your saved data stays linked to your account so you can chat with it anytime.
           </Text>
-        </View>
 
-        <Pressable
-          onPress={() => router.push("/(auth)/signup")}
-          disabled={isLoading}
-          style={({ pressed }) => [styles.footerLinkWrap, pressed && styles.buttonPressed]}
-        >
-          <Text style={styles.link}>
-            Don&apos;t have an account? <Text style={styles.linkStrong}>Sign up</Text>
-          </Text>
-        </Pressable>
+          <Pressable
+            onPress={() => router.push("/(auth)/signup")}
+            disabled={isLoading}
+            style={({ pressed }) => [styles.secondaryLinkWrap, pressed && styles.buttonPressed]}
+          >
+            <Text style={styles.secondaryLink}>
+              Don&apos;t have an account? <Text style={styles.linkStrong}>Sign up</Text>
+            </Text>
+          </Pressable>
+        </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -215,6 +226,36 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: COLORS.text,
     marginBottom: 10,
+  },
+  passwordContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 14,
+    backgroundColor: COLORS.background,
+    paddingHorizontal: 14,
+    minHeight: 56,
+  },
+  passwordInput: {
+    flex: 1,
+    paddingVertical: 15,
+    paddingHorizontal: 0,
+    fontSize: 16,
+    color: COLORS.text,
+    backgroundColor: "transparent",
+  },
+  passwordToggle: {
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: COLORS.card,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  passwordToggleText: {
+    color: COLORS.primary,
+    fontWeight: "700",
   },
   subtitle: {
     fontSize: 16,
@@ -306,6 +347,17 @@ const styles = StyleSheet.create({
   },
   footerLinkWrap: {
     alignItems: "center",
+    marginTop: 20,
+    paddingBottom: 20,
+  },
+  secondaryLinkWrap: {
+    alignItems: "center",
+    marginTop: 18,
+  },
+  secondaryLink: {
+    color: COLORS.textSecondary,
+    fontSize: 15,
+    textAlign: "center",
   },
   link: {
     color: COLORS.textSecondary,

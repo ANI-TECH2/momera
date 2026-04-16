@@ -73,7 +73,7 @@ function buildFileResponse(
 
 function buildRecentFallbackMessage(
   keyword: string,
-  recentNotes: any[],
+  recentNotes: any[],                                                           
   recentPrices: any[]
 ): string {
   let msg = `Nothing found for *"${keyword}"*.\n\n`;

@@ -1,0 +1,45 @@
+import { NlpManager } from "node-nlp";
+
+export function addUpdateIntent(manager: NlpManager): void {
+  const updateDocs = [
+    "update the price",
+    "update coke price",
+    "change garri price to 600",
+    "update price of rice to 3000",
+    "edit the price of tomato",
+    "change the price",
+    "update my note",
+    "edit my note about john",
+    "change john number",
+    "update johns contact",
+    "fix the price of bread",
+    "correct the price",
+    "change price of beans",
+    "update price to 500",
+    "modify the price",
+    "change the number i saved",
+    "update my saved contact",
+    "edit price of shoe",
+    "update bag price",
+    "replace the old price",
+    "set new price for garri",
+    "change price of diesel",
+    "update dollar price of milk",
+    "change the gbp price of bread",
+    "update pound price of petrol",
+    "edit usd price of coffee",
+    "change euro price of baguette",
+    "update rupee price of rice",
+    "fix the cedi price of kenkey",
+    "update the rand price of petrol",
+    "change dirham price of rent",
+    "update shilling price of unga",
+    "edit my uk contact number",
+    "edit my uk contact number",
+    "change my us friend number",
+    "update india contact",
+    "fix saved number for james",
+  ];
+
+  updateDocs.forEach(doc => manager.addDocument("en", doc, "intent.update"));
+}
