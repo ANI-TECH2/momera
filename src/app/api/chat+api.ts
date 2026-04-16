@@ -4,6 +4,8 @@ import { handleRetrieve } from "@/server/handlers/retrieve";
 import { handleDelete } from "@/server/handlers/deleteHandler";
 import { handleList } from "@/server/handlers/userdataview";
 import { serverSupabase } from "@/server/supabase";
+import { deleteRecord } from "@/server/handlers/deleteHandler";
+import { replaceDuplicate, keepBoth, type PendingSaveDuplicate } from "@/server/handlers/save";
 
 const INTENT_THRESHOLD = 0.62;
 const FAST_INTENT_SCORE = 0.99;
@@ -47,6 +49,10 @@ type PendingDeleteMatch = {
   label: string;
   table: string;
 };
+
+// ─── PENDING SAVE DUPLICATE STATE ─────────────────────────────────────────────
+// When save detects a duplicate, we store it so the next message can confirm
+// whether to replace it or keep both.
 
 // ───────────────────────────────────────────────────────────────
 // AUTH
@@ -221,6 +227,30 @@ function resolveDeleteConfirmation(
     m.label.toLowerCase().includes(lower) || lower.includes(m.label.toLowerCase().slice(0, 10))
   );
   if (byName) return byName;
+
+  return null;
+}
+
+// ───────────────────────────────────────────────────────────────
+// PENDING SAVE DUPLICATE CONFIRMATION DETECTION
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * Detects if user is responding to a duplicate save confirmation.
+ * Matches: "replace it", "yes", "keep both", "no"
+ */
+function resolveSaveDuplicateResponse(message: string): "replace" | "keep_both" | null {
+  const lower = normalizeLoose(message);
+
+  // Replace it — affirm to overwrite
+  if (/^(replace|replace it|yes|yep|yeah|yup|sure|ok|overwrite|update|change|new version)[\s.!]*$/i.test(lower)) {
+    return "replace";
+  }
+
+  // Keep both — affirm to save separately
+  if (/^(keep both|no|nope|keep|both|save|different|separate|new)[\s.!]*$/i.test(lower)) {
+    return "keep_both";
+  }
 
   return null;
 }
@@ -415,6 +445,52 @@ async function clearPendingDeleteMatches(userId: string): Promise<void> {
   }
 }
 
+async function loadPendingSaveDuplicate(
+  userId: string
+): Promise<PendingSaveDuplicate | null> {
+  try {
+    const { data } = await serverSupabase
+      .from("chat_context")
+      .select("pending_save_duplicate")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (!data?.pending_save_duplicate) return null;
+    return data.pending_save_duplicate as PendingSaveDuplicate;
+  } catch {
+    return null;
+  }
+}
+
+async function clearPendingSaveDuplicate(userId: string): Promise<void> {
+  try {
+    await serverSupabase
+      .from("chat_context")
+      .update({ pending_save_duplicate: null })
+      .eq("user_id", userId);
+  } catch {
+    // best effort
+  }
+}
+
+async function savePendingSaveDuplicate(
+  userId: string,
+  duplicate: PendingSaveDuplicate
+): Promise<void> {
+  try {
+    await serverSupabase.from("chat_context").upsert(
+      {
+        user_id: userId,
+        pending_save_duplicate: duplicate,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id" }
+    );
+  } catch (error) {
+    console.warn("[Chat API] Failed to save pending duplicate:", error);
+  }
+}
+
 // ───────────────────────────────────────────────────────────────
 // DETECT INTENT PIPELINE
 // ───────────────────────────────────────────────────────────────
@@ -489,26 +565,86 @@ export async function POST(req: Request) {
         // Clear pending state immediately
         await clearPendingDeleteMatches(userId);
 
-        // Import deleteRecord from deleteHandler via inline call
-        // We re-use handleDelete with a precise ID-based message
-        const res = await handleDelete(
-          `delete id:${confirmed.id} table:${confirmed.table}`,
-          userId,
-          []
-        );
-        const data = await res.json();
-        // Patch message to be friendly since we're confirming
-        if (data.type === "assistant" && data.deleted_id) {
+        // Delete the confirmed record directly using the stored ID
+        const record = {
+          id: confirmed.id,
+          label: confirmed.label,
+          table: confirmed.table as "notes" | "product_prices" | "images" | "documents",
+        };
+        const { success, error } = await deleteRecord(userId, record);
+
+        if (!success) {
           return Response.json({
-            ...data,
-            message: `🗑️ Done! *"${confirmed.label}"* has been deleted.`,
-          });
+            type: "system",
+            message: `Failed to delete "${confirmed.label}". Please try again.`,
+          }, { status: 500 });
         }
-        return Response.json(data);
+
+        return Response.json({
+          type: "assistant",
+          message: `🗑️ Done! *"${confirmed.label}"* has been deleted.`,
+          deleted_id: confirmed.id,
+          deleted_table: confirmed.table,
+        });
       }
 
       // User said something unrelated — treat as a fresh message, clear pending
       await clearPendingDeleteMatches(userId);
+    }
+
+    // ── Check for pending save duplicate confirmation ──────────────────────────
+    // If the user previously got a duplicate warning, their next message might be
+    // a yes/no or "replace it"/"keep both" to confirm the action.
+    const pendingDuplicate = await loadPendingSaveDuplicate(userId);
+    if (pendingDuplicate) {
+      const response = resolveSaveDuplicateResponse(message);
+
+      if (response === "replace") {
+        // Clear pending state immediately
+        await clearPendingSaveDuplicate(userId);
+
+        // Replace the duplicate
+        const { success, error } = await replaceDuplicate(userId, pendingDuplicate);
+
+        if (!success) {
+          return Response.json({
+            type: "system",
+            message: `Failed to update. Please try again.`,
+          }, { status: 500 });
+        }
+
+        return Response.json({
+          type: "assistant",
+          message: `✅ Updated successfully! The old version has been replaced with the new one.`,
+          note_id: pendingDuplicate.existingId,
+        });
+      } else if (response === "keep_both") {
+        // Clear pending state immediately
+        await clearPendingSaveDuplicate(userId);
+
+        // Save as a new note
+        const { success, id, error } = await keepBoth(userId, {
+          content: pendingDuplicate.newContent,
+          title: pendingDuplicate.newTitle,
+          category: pendingDuplicate.category,
+        });
+
+        if (!success) {
+          return Response.json({
+            type: "system",
+            message: `Failed to save. Please try again.`,
+          }, { status: 500 });
+        }
+
+        return Response.json({
+          type: "assistant",
+          message: `✅ Saved! Both versions are now saved.`,
+          note_id: id,
+        });
+      }
+
+      // User said something unrelated — treat as a fresh message, clear pending
+      await clearPendingSaveDuplicate(userId);
     }
 
     // ── Normal intent detection ─────────────────────────────────────────────
@@ -528,7 +664,19 @@ export async function POST(req: Request) {
     // ── Save ──────────────────────────────────────────────────────────────────
     if (detection.intent === "intent.save") {
       const res = await handleSave(message, userId, detection.entities);
-      const data = await res.json();
+      const data: ChatResponsePayload = await res.json();
+
+      // If duplicate detected, persist it for the next confirmation turn
+      if (data.duplicate && data.existingId && typeof data.newContent === "string" && typeof data.newTitle === "string" && typeof data.category === "string") {
+        const pendingDup: PendingSaveDuplicate = {
+          existingId: data.existingId,
+          newContent: data.newContent,
+          newTitle: data.newTitle,
+          category: data.category,
+        };
+        await savePendingSaveDuplicate(userId, pendingDup);
+      }
+
       return Response.json(data);
     }
 

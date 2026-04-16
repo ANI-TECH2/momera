@@ -123,6 +123,17 @@ CREATE TABLE IF NOT EXISTS chat_history (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Chat context table: Stores temporary state for pending confirmations
+CREATE TABLE IF NOT EXISTS chat_context (
+  user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  last_message TEXT, -- Last user message for context
+  last_intent TEXT, -- Last detected intent
+  last_entities JSONB, -- Extracted entities from last message
+  pending_delete_matches JSONB, -- Pending delete matches waiting for user confirmation
+  pending_save_duplicate JSONB, -- Pending save duplicate waiting for user confirmation
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- ============================================================
 -- 4. ROW LEVEL SECURITY (RLS) - MAKES ALL DATA PRIVATE TO USER
 -- ============================================================
@@ -133,6 +144,7 @@ ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE images ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_storage ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chat_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chat_context ENABLE ROW LEVEL SECURITY;
 
 -- Force RLS for table owners (bypass only with SECURITY DEFINER)
 ALTER TABLE notes FORCE ROW LEVEL SECURITY;
@@ -140,6 +152,7 @@ ALTER TABLE documents FORCE ROW LEVEL SECURITY;
 ALTER TABLE images FORCE ROW LEVEL SECURITY;
 ALTER TABLE user_storage FORCE ROW LEVEL SECURITY;
 ALTER TABLE chat_history FORCE ROW LEVEL SECURITY;
+ALTER TABLE chat_context FORCE ROW LEVEL SECURITY;
 
 -- -----------------------------------------------------------
 -- RLS POLICIES FOR notes TABLE
@@ -259,6 +272,30 @@ CREATE POLICY "Users can update own chat"
 -- Users can only delete their own chat messages
 CREATE POLICY "Users can delete own chat" 
   ON chat_history FOR DELETE 
+  USING (auth.uid() = user_id);
+
+-- -----------------------------------------------------------
+-- RLS POLICIES FOR chat_context TABLE
+-- -----------------------------------------------------------
+
+-- Users can only view their own chat context
+CREATE POLICY "Users can view own chat context" 
+  ON chat_context FOR SELECT 
+  USING (auth.uid() = user_id);
+
+-- Users can only insert chat context for themselves
+CREATE POLICY "Users can insert own chat context" 
+  ON chat_context FOR INSERT 
+  WITH CHECK (auth.uid() = user_id);
+
+-- Users can only update their own chat context
+CREATE POLICY "Users can update own chat context" 
+  ON chat_context FOR UPDATE 
+  USING (auth.uid() = user_id);
+
+-- Users can only delete their own chat context
+CREATE POLICY "Users can delete own chat context" 
+  ON chat_context FOR DELETE 
   USING (auth.uid() = user_id);
 
 -- ============================================================

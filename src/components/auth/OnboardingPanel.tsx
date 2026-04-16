@@ -1,0 +1,126 @@
+import { View, Text, StyleSheet } from "react-native";
+import { COLORS } from "@/lib/constants";
+
+const STEPS = [
+  {
+    title: "Save anything fast",
+    description: "Store notes, contacts, prices, images, and documents in one private place.",
+    emoji: "📝",
+  },
+  {
+    title: "Ask and retrieve",
+    description: "Search your saved data naturally and get instant replies from Memora.",
+    emoji: "🔎",
+  },
+  {
+    title: "Keep it secure",
+    description: "Your data stays linked to your account and is available whenever you sign in.",
+    emoji: "🔒",
+  },
+];
+
+export default function OnboardingPanel({
+  title,
+  subtitle,
+}: {
+  title: string;
+  subtitle: string;
+}) {
+  return (
+    <View style={styles.panel}>
+      <View style={styles.header}>
+        <Text style={styles.title}>{title}</Text>
+        <Text style={styles.subtitle}>{subtitle}</Text>
+      </View>
+
+      <View style={styles.steps}>
+        {STEPS.map((step, index) => (
+          <View key={step.title} style={styles.stepCard}>
+            <View style={styles.stepBadge}>
+              <Text style={styles.stepBadgeText}>{index + 1}</Text>
+            </View>
+            <View style={styles.stepContent}>
+              <Text style={styles.stepLabel}>{step.emoji} {step.title}</Text>
+              <Text style={styles.stepDescription}>{step.description}</Text>
+            </View>
+          </View>
+        ))}
+      </View>
+
+      <Text style={styles.note}>
+        Use the form below to sign in or create your account and start saving.
+      </Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  panel: {
+    backgroundColor: COLORS.card,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: 22,
+    gap: 18,
+  },
+  header: {
+    gap: 10,
+  },
+  title: {
+    fontSize: 30,
+    fontWeight: "800",
+    color: COLORS.text,
+  },
+  subtitle: {
+    fontSize: 15,
+    lineHeight: 22,
+    color: COLORS.textSecondary,
+  },
+  steps: {
+    gap: 14,
+  },
+  stepCard: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 14,
+    padding: 16,
+    borderRadius: 18,
+    backgroundColor: COLORS.background,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  stepBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: COLORS.primary + "22",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stepBadgeText: {
+    color: COLORS.primary,
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  stepContent: {
+    flex: 1,
+    gap: 4,
+  },
+  stepLabel: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: COLORS.text,
+  },
+  stepDescription: {
+    marginTop: 2,
+    color: COLORS.textSecondary,
+    lineHeight: 20,
+    fontSize: 14,
+  },
+  note: {
+    marginTop: 4,
+    color: COLORS.textSecondary,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+});

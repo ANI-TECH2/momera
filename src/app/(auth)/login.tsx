@@ -1,61 +1,96 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   View,
   Text,
   TextInput,
   Pressable,
   StyleSheet,
-  Alert,
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Animated,
+  Keyboard,
+  SafeAreaView,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useAuth } from "@/lib/auth";
 import { COLORS } from "@/lib/constants";
+import AuthOnboarding from "./onboarding";
+import { Ionicons, AntDesign } from "@expo/vector-icons";
 
 export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loadingType, setLoadingType] = useState<"email" | "google" | null>(null);
+  const [error, setError] = useState("");
+  const [remember, setRemember] = useState(false);
+  const [focused, setFocused] = useState<"email" | "password" | null>(null);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
 
   const { signInWithEmail, signInWithGoogle, loading: authLoading } = useAuth();
   const router = useRouter();
 
   const isLoading = loadingType !== null;
 
-  const handleLogin = async () => {
-    const cleanEmail = email.trim();
-    const cleanPassword = password.trim();
+  // animation
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(40)).current;
 
-    if (!cleanEmail || !cleanPassword) {
-      Alert.alert("Missing details", "Please enter your email and password.");
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 400,
+        useNativeDriver: true,
+      }),
+      Animated.timing(translateY, {
+        toValue: 0,
+        duration: 400,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, []);
+
+  // keyboard detection
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardOpen(true));
+    const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardOpen(false));
+
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+
+  const handleLogin = async () => {
+    setError("");
+
+    if (!email.trim() || !password.trim()) {
+      setError("Email and password are required");
       return;
     }
 
     setLoadingType("email");
 
     try {
-      await signInWithEmail(cleanEmail, cleanPassword);
-    } catch (error) {
-      Alert.alert("Login failed", (error as Error).message || "Unable to sign in.");
+      await signInWithEmail(email.trim(), password.trim());
+    } catch (e: any) {
+      setError(e.message || "Login failed");
     } finally {
       setLoadingType(null);
     }
   };
 
   const handleGoogle = async () => {
+    setError("");
     setLoadingType("google");
 
     try {
       await signInWithGoogle();
-    } catch (error) {
-      Alert.alert(
-        "Google login failed",
-        (error as Error).message || "Unable to continue with Google."
-      );
+    } catch (e: any) {
+      setError(e.message || "Google login failed");
     } finally {
       setLoadingType(null);
     }
@@ -75,315 +110,282 @@ export default function Login() {
       style={styles.wrapper}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.hero}>
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>MEMORA</Text>
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.container}>
+        
+        {/* ✅ ONBOARDING */}
+        {!keyboardOpen && (
+          <View style={styles.onboardingSection}>
+            <AuthOnboarding compact />
           </View>
+        )}
 
-          <Text style={styles.title}>Welcome back</Text>
-          <Text style={styles.subtitle}>
-            Sign in to access your private notes, saved memories, prices, images, and documents.
-          </Text>
-        </View>
+        {/* ✅ FORM */}
+        <Animated.View
+          style={[
+            styles.formWrapper,
+            { opacity: fadeAnim, transform: [{ translateY }] },
+          ]}
+        >
+          <ScrollView
+            contentContainerStyle={styles.formContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.card}>
+              <Text style={styles.title}>Welcome back 👋</Text>
+              <Text style={styles.subtitle}>Sign in to continue</Text>
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Sign in to your account</Text>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Email</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Enter your email"
-              placeholderTextColor={COLORS.textSecondary}
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoCorrect={false}
-              editable={!isLoading}
-            />
-          </View>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Password</Text>
-            <View style={styles.passwordContainer}>
-              <TextInput
-                style={styles.passwordInput}
-                placeholder="Enter your password"
-                placeholderTextColor={COLORS.textSecondary}
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry={!showPassword}
-                autoCapitalize="none"
-                autoCorrect={false}
-                editable={!isLoading}
-              />
-              <Pressable
-                style={styles.passwordToggle}
-                onPress={() => setShowPassword((prev) => !prev)}
+              {/* EMAIL */}
+              <View
+                style={[
+                  styles.inputWrapper,
+                  focused === "email" && styles.inputFocused,
+                ]}
               >
-                <Text style={styles.passwordToggleText}>
-                  {showPassword ? "Hide" : "Show"}
+                <Ionicons name="mail-outline" size={20} color={COLORS.textSecondary} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Email"
+                  placeholderTextColor={COLORS.textSecondary}
+                  value={email}
+                  onChangeText={setEmail}
+                  onFocus={() => setFocused("email")}
+                  onBlur={() => setFocused(null)}
+                />
+              </View>
+
+              {/* PASSWORD */}
+              <View
+                style={[
+                  styles.inputWrapper,
+                  focused === "password" && styles.inputFocused,
+                ]}
+              >
+                <Ionicons name="lock-closed-outline" size={20} color={COLORS.textSecondary} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Password"
+                  placeholderTextColor={COLORS.textSecondary}
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry={!showPassword}
+                  onFocus={() => setFocused("password")}
+                  onBlur={() => setFocused(null)}
+                />
+
+                <Pressable onPress={() => setShowPassword(!showPassword)}>
+                  <Text style={styles.toggleText}>
+                    {showPassword ? "Hide" : "Show"}
+                  </Text>
+                </Pressable>
+              </View>
+
+              {/* REMEMBER */}
+              <Pressable
+                style={styles.rememberRow}
+                onPress={() => setRemember(!remember)}
+              >
+                <View style={[styles.checkbox, remember && styles.checked]}>
+                  {remember && <Text style={styles.check}>✓</Text>}
+                </View>
+                <Text style={styles.rememberText}>Remember me</Text>
+              </Pressable>
+
+              {/* ERROR */}
+              {error ? <Text style={styles.error}>{error}</Text> : null}
+
+              {/* LOGIN */}
+              <Pressable
+                style={[styles.primaryButton, isLoading && styles.buttonDisabled]}
+                onPress={handleLogin}
+                disabled={isLoading}
+              >
+                {loadingType === "email" ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.primaryText}>Sign In</Text>
+                )}
+              </Pressable>
+
+              {/* DIVIDER */}
+              <View style={styles.dividerRow}>
+                <View style={styles.divider} />
+                <Text style={styles.dividerText}>OR</Text>
+                <View style={styles.divider} />
+              </View>
+
+              {/* GOOGLE */}
+              <Pressable style={styles.googleButton} onPress={handleGoogle}>
+                <AntDesign name="google" size={18} />
+                <Text style={styles.googleText}> Continue with Google</Text>
+              </Pressable>
+
+              {/* LINK */}
+              <Pressable onPress={() => router.push("/(auth)/signup")}>
+                <Text style={styles.link}>
+                  Don’t have an account?{" "}
+                  <Text style={styles.linkStrong}>Sign up</Text>
                 </Text>
               </Pressable>
             </View>
-          </View>
-
-          <Pressable
-            style={({ pressed }) => [
-              styles.primaryButton,
-              (pressed || isLoading) && styles.buttonPressed,
-              isLoading && styles.buttonDisabled,
-            ]}
-            onPress={handleLogin}
-            disabled={isLoading}
-          >
-            {loadingType === "email" ? (
-              <ActivityIndicator color="#FFFFFF" />
-            ) : (
-              <Text style={styles.primaryButtonText}>Sign In</Text>
-            )}
-          </Pressable>
-
-          <View style={styles.dividerRow}>
-            <View style={styles.divider} />
-            <Text style={styles.dividerText}>or</Text>
-            <View style={styles.divider} />
-          </View>
-
-          <Pressable
-            style={({ pressed }) => [
-              styles.googleButton,
-              (pressed || isLoading) && styles.buttonPressed,
-              isLoading && styles.buttonDisabled,
-            ]}
-            onPress={handleGoogle}
-            disabled={isLoading}
-          >
-            {loadingType === "google" ? (
-              <ActivityIndicator color={COLORS.text} />
-            ) : (
-              <Text style={styles.googleButtonText}>Continue with Google</Text>
-            )}
-          </Pressable>
-
-          <Text style={styles.privacyText}>
-            Your saved data stays linked to your account so you can chat with it anytime.
-          </Text>
-
-          <Pressable
-            onPress={() => router.push("/(auth)/signup")}
-            disabled={isLoading}
-            style={({ pressed }) => [styles.secondaryLinkWrap, pressed && styles.buttonPressed]}
-          >
-            <Text style={styles.secondaryLink}>
-              Don&apos;t have an account? <Text style={styles.linkStrong}>Sign up</Text>
-            </Text>
-          </Pressable>
+          </ScrollView>
+        </Animated.View>
         </View>
-      </ScrollView>
+      </SafeAreaView>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  wrapper: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-  },
-  scrollContent: {
-    flexGrow: 1,
+  wrapper: { flex: 1, backgroundColor: COLORS.background },
+  safeArea: { flex: 1 },
+  container: { flex: 1, paddingHorizontal: 20 },
+
+  // ✅ dynamic onboarding (flexShrink allows natural sizing)
+  onboardingSection: {
+    flexShrink: 1,
+    minHeight: 160,
+    maxHeight: 280,
+    marginBottom: 24,
     justifyContent: "center",
-    paddingHorizontal: 24,
-    paddingVertical: 32,
   },
-  hero: {
-    marginBottom: 28,
+
+  // ✅ form fills remaining space
+  formWrapper: {
+    flex: 1,
   },
-  badge: {
-    alignSelf: "flex-start",
+
+  // ✅ spacing between onboarding & form
+  formContent: {
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 40,
+  },
+
+  card: {
     backgroundColor: COLORS.card,
+    borderRadius: 24,
+    padding: 22,
     borderWidth: 1,
     borderColor: COLORS.border,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 999,
-    marginBottom: 18,
+    marginTop: 10, // 🔥 spacing fix
   },
-  badgeText: {
-    color: COLORS.primary,
-    fontSize: 12,
-    fontWeight: "700",
-    letterSpacing: 1,
+
+  title: { fontSize: 22, fontWeight: "700", color: COLORS.text },
+
+  subtitle: {
+    fontSize: 14,
+    color: COLORS.textSecondary,
+    marginBottom: 20,
   },
-  title: {
-    fontSize: 34,
-    fontWeight: "800",
-    color: COLORS.text,
-    marginBottom: 10,
-  },
-  passwordContainer: {
+
+  inputWrapper: {
     flexDirection: "row",
     alignItems: "center",
     borderWidth: 1,
     borderColor: COLORS.border,
     borderRadius: 14,
-    backgroundColor: COLORS.background,
-    paddingHorizontal: 14,
-    minHeight: 56,
+    paddingHorizontal: 12,
+    marginBottom: 12,
   },
-  passwordInput: {
-    flex: 1,
-    paddingVertical: 15,
-    paddingHorizontal: 0,
-    fontSize: 16,
-    color: COLORS.text,
-    backgroundColor: "transparent",
+
+  inputFocused: {
+    borderColor: COLORS.primary,
+    shadowColor: COLORS.primary,
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
   },
-  passwordToggle: {
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    borderRadius: 10,
-    backgroundColor: COLORS.card,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  passwordToggleText: {
-    color: COLORS.primary,
-    fontWeight: "700",
-  },
-  subtitle: {
-    fontSize: 16,
-    lineHeight: 24,
-    color: COLORS.textSecondary,
-  },
-  card: {
-    backgroundColor: COLORS.card,
-    borderRadius: 20,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    marginBottom: 24,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: COLORS.text,
-    marginBottom: 18,
-  },
-  inputGroup: {
-    marginBottom: 16,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: COLORS.textSecondary,
-    marginBottom: 8,
-  },
+
   input: {
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 15,
+    flex: 1,
+    padding: 12,
     fontSize: 16,
     color: COLORS.text,
-    backgroundColor: COLORS.background,
   },
-  primaryButton: {
-    backgroundColor: COLORS.primary,
-    paddingVertical: 16,
-    borderRadius: 14,
+
+  toggleText: {
+    color: COLORS.primary,
+    fontWeight: "600",
+  },
+
+  rememberRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+
+  checkbox: {
+    width: 18,
+    height: 18,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    marginRight: 8,
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 8,
   },
-  primaryButtonText: {
-    color: "#FFFFFF",
-    fontSize: 17,
-    fontWeight: "700",
+
+  checked: {
+    backgroundColor: COLORS.primary,
   },
+
+  check: {
+    color: "#fff",
+    fontSize: 12,
+  },
+
+  rememberText: {
+    color: COLORS.textSecondary,
+  },
+
+  error: {
+    color: "red",
+    marginBottom: 10,
+  },
+
+  primaryButton: {
+    backgroundColor: COLORS.primary,
+    padding: 16,
+    borderRadius: 14,
+    alignItems: "center",
+    marginTop: 6,
+  },
+
+  primaryText: { color: "#fff", fontWeight: "700" },
+
   dividerRow: {
     flexDirection: "row",
     alignItems: "center",
     marginVertical: 18,
   },
-  divider: {
-    flex: 1,
-    height: 1,
-    backgroundColor: COLORS.border,
-  },
-  dividerText: {
-    marginHorizontal: 12,
-    color: COLORS.textSecondary,
-    fontSize: 13,
-    fontWeight: "500",
-  },
+
+  divider: { flex: 1, height: 1, backgroundColor: COLORS.border },
+
+  dividerText: { marginHorizontal: 10, color: COLORS.textSecondary },
+
   googleButton: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
     borderWidth: 1,
     borderColor: COLORS.border,
-    paddingVertical: 16,
+    padding: 16,
     borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: COLORS.background,
   },
-  googleButtonText: {
-    color: COLORS.text,
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  privacyText: {
-    marginTop: 16,
-    color: COLORS.textSecondary,
-    fontSize: 13,
-    lineHeight: 20,
-    textAlign: "center",
-  },
-  footerLinkWrap: {
-    alignItems: "center",
-    marginTop: 20,
-    paddingBottom: 20,
-  },
-  secondaryLinkWrap: {
-    alignItems: "center",
-    marginTop: 18,
-  },
-  secondaryLink: {
-    color: COLORS.textSecondary,
-    fontSize: 15,
-    textAlign: "center",
-  },
+
+  googleText: { fontWeight: "600", color: COLORS.text },
+
   link: {
-    color: COLORS.textSecondary,
-    fontSize: 15,
     textAlign: "center",
+    marginTop: 12,
+    color: COLORS.textSecondary,
   },
-  linkStrong: {
-    color: COLORS.primary,
-    fontWeight: "700",
-  },
-  buttonPressed: {
-    opacity: 0.85,
-  },
-  buttonDisabled: {
-    opacity: 0.7,
-  },
-  center: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: COLORS.background,
-    paddingHorizontal: 24,
-  },
-  loadingText: {
-    color: COLORS.text,
-    fontSize: 16,
-    marginTop: 14,
-  },
+
+  linkStrong: { color: COLORS.primary, fontWeight: "700" },
+
+  buttonDisabled: { opacity: 0.7 },
+
+  center: { flex: 1, justifyContent: "center", alignItems: "center" },
+
+  loadingText: { marginTop: 10, color: COLORS.text },
 });

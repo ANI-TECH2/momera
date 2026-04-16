@@ -1,7 +1,7 @@
-import { createClient } from "@/server/supabase";
+import { serverSupabase } from "@/server/supabase";
 import { StatusError } from 'expo-server';
 
-const supabase = createClient();
+const supabase = serverSupabase;
 
 export async function DELETE(request: Request) {
   try {

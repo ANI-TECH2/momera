@@ -15,6 +15,15 @@ import { ExtractedEntity } from "@/app/api/chat+api";
 
 type SaveEntity = ExtractedEntity;
 
+// ─── TYPES ───────────────────────────────────────────────────────────────────
+
+export type PendingSaveDuplicate = {
+  existingId: string;
+  newContent: string;
+  newTitle: string;
+  category: string;
+};
+
 // ─── INTENT KEYWORDS ─────────────────────────────────────────────────────────
 // Single source of truth for all intent/command words that must NEVER appear
 // in saved data (product names, note content, contact names, titles, etc.).
@@ -341,6 +350,73 @@ function buildNoteNormalizedContent(
   );
 }
 
+// ─── UPDATE/REPLACE LOGIC ────────────────────────────────────────────────────
+
+export async function replaceDuplicate(
+  userId: string,
+  duplicate: PendingSaveDuplicate
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error: updateError } = await serverSupabase
+      .from("notes")
+      .update({
+        content: duplicate.newContent,
+        title: duplicate.newTitle,
+        category: duplicate.category,
+        content_hash: generateHash(duplicate.newContent),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", duplicate.existingId)
+      .eq("user_id", userId);
+
+    if (updateError) {
+      console.error("[Save] Replace duplicate error:", updateError);
+      return { success: false, error: updateError.message };
+    }
+
+    return { success: true };
+  } catch (err) {
+    console.error("[Save] Replace unexpected error:", err);
+    return { success: false, error: "Unexpected error" };
+  }
+}
+
+// ─── KEEP BOTH LOGIC ─────────────────────────────────────────────────────────
+
+export async function keepBoth(
+  userId: string,
+  newNote: {
+    content: string;
+    title: string;
+    category: string;
+  }
+): Promise<{ success: boolean; id?: string; error?: string }> {
+  try {
+    const { data: inserted, error: insertError } = await serverSupabase
+      .from("notes")
+      .insert({
+        user_id: userId,
+        content: newNote.content,
+        title: newNote.title,
+        category: newNote.category,
+        content_hash: generateHash(newNote.content),
+        created_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single();
+
+    if (insertError) {
+      console.error("[Save] Keep both insert error:", insertError);
+      return { success: false, error: insertError.message };
+    }
+
+    return { success: true, id: inserted?.id };
+  } catch (err) {
+    console.error("[Save] Keep both unexpected error:", err);
+    return { success: false, error: "Unexpected error" };
+  }
+}
+
 // ─── MAIN HANDLER ────────────────────────────────────────────────────────────
 
 export async function handleSave(
@@ -541,6 +617,9 @@ export async function handleSave(
           `Say *replace it* to overwrite, or *keep both* to save a new copy.`,
         duplicate: true,
         existingId: exactNote.id,
+        newContent: finalContent,
+        newTitle: title,
+        category: category,
       });
     }
 
@@ -555,6 +634,9 @@ export async function handleSave(
           `• Or change the title/content so it's clearly different.`,
         duplicate: true,
         existingId: similarNote.id,
+        newContent: finalContent,
+        newTitle: title,
+        category: category,
       });
     }
 

@@ -1,66 +1,100 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   View,
   Text,
   TextInput,
   Pressable,
   StyleSheet,
-  Alert,
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Animated,
+  Keyboard,
+  SafeAreaView,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useAuth } from "@/lib/auth";
 import { COLORS } from "@/lib/constants";
+import AuthOnboarding from "./onboarding";
+import { Ionicons, AntDesign } from "@expo/vector-icons";
 
 export default function Signup() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loadingType, setLoadingType] = useState<"email" | "google" | null>(null);
+  const [error, setError] = useState("");
+  const [focused, setFocused] = useState<"email" | "password" | null>(null);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
 
   const { signUpWithEmail, signInWithGoogle, loading: authLoading } = useAuth();
   const router = useRouter();
 
   const isLoading = loadingType !== null;
 
-  const handleSignup = async () => {
-    const cleanEmail = email.trim();
-    const cleanPassword = password.trim();
+  // 🔥 animation
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(40)).current;
 
-    if (!cleanEmail || !cleanPassword) {
-      Alert.alert("Missing details", "Please enter your email and password.");
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 400,
+        useNativeDriver: true,
+      }),
+      Animated.timing(translateY, {
+        toValue: 0,
+        duration: 400,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, []);
+
+  // 🔥 keyboard fix
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardOpen(true));
+    const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardOpen(false));
+
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+
+  const handleSignup = async () => {
+    setError("");
+
+    if (!email.trim() || !password.trim()) {
+      setError("Email and password are required");
       return;
     }
 
-    if (cleanPassword.length < 6) {
-      Alert.alert("Weak password", "Password must be at least 6 characters.");
+    if (password.length < 6) {
+      setError("Password must be at least 6 characters");
       return;
     }
 
     setLoadingType("email");
 
     try {
-      await signUpWithEmail(cleanEmail, cleanPassword);
-    } catch (error) {
-      Alert.alert("Signup failed", (error as Error).message || "Unable to create account.");
+      await signUpWithEmail(email.trim(), password.trim());
+    } catch (e: any) {
+      setError(e.message || "Signup failed");
     } finally {
       setLoadingType(null);
     }
   };
 
   const handleGoogle = async () => {
+    setError("");
     setLoadingType("google");
 
     try {
       await signInWithGoogle();
-    } catch (error) {
-      Alert.alert(
-        "Google signup failed",
-        (error as Error).message || "Unable to continue with Google."
-      );
+    } catch (e: any) {
+      setError(e.message || "Google signup failed");
     } finally {
       setLoadingType(null);
     }
@@ -80,309 +114,232 @@ export default function Signup() {
       style={styles.wrapper}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.hero}>
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>MEMORA</Text>
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.container}>
+        {/* ✅ ONBOARDING */}
+        {!keyboardOpen && (
+          <View style={styles.onboardingSection}>
+            <AuthOnboarding compact />
           </View>
+        )}
 
-          <Text style={styles.title}>Create your account</Text>
-          <Text style={styles.subtitle}>
-            Start saving notes, memories, prices, images, and documents you can retrieve through chat.
-          </Text>
-        </View>
+        {/* ✅ FORM */}
+        <Animated.View
+          style={[
+            styles.formWrapper,
+            { opacity: fadeAnim, transform: [{ translateY }] },
+          ]}
+        >
+          <ScrollView
+            contentContainerStyle={styles.formContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.card}>
+              <Text style={styles.title}>Create account 🚀</Text>
+              <Text style={styles.subtitle}>Start using Memora</Text>
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Join Memora</Text>
+              {/* EMAIL */}
+              <View
+                style={[
+                  styles.inputWrapper,
+                  focused === "email" && styles.inputFocused,
+                ]}
+              >
+                <Ionicons name="mail-outline" size={20} color={COLORS.textSecondary} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Email"
+                  value={email}
+                  onChangeText={setEmail}
+                  onFocus={() => setFocused("email")}
+                  onBlur={() => setFocused(null)}
+                />
+              </View>
 
-          {/* EMAIL */}
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Email</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Enter your email"
-              placeholderTextColor={COLORS.textSecondary}
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoCorrect={false}
-              editable={!isLoading}
-            />
-          </View>
+              {/* PASSWORD */}
+              <View
+                style={[
+                  styles.inputWrapper,
+                  focused === "password" && styles.inputFocused,
+                ]}
+              >
+                <Ionicons name="lock-closed-outline" size={20} color={COLORS.textSecondary} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Password (6+ characters)"
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry={!showPassword}
+                  onFocus={() => setFocused("password")}
+                  onBlur={() => setFocused(null)}
+                />
+                <Pressable onPress={() => setShowPassword(!showPassword)}>
+                  <Text style={styles.toggleText}>
+                    {showPassword ? "Hide" : "Show"}
+                  </Text>
+                </Pressable>
+              </View>
 
-          {/* PASSWORD */}
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Password</Text>
+              {/* ERROR */}
+              {error ? <Text style={styles.error}>{error}</Text> : null}
 
-            <View style={styles.passwordContainer}>
-              <TextInput
-                style={styles.passwordInput}
-                placeholder="Create a password (6+ chars)"
-                placeholderTextColor={COLORS.textSecondary}
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry={!showPassword}
-                autoCapitalize="none"
-                autoCorrect={false}
-                editable={!isLoading}
-              />
+              {/* SIGNUP */}
+              <Pressable
+                style={[styles.primaryButton, isLoading && styles.buttonDisabled]}
+                onPress={handleSignup}
+                disabled={isLoading}
+              >
+                {loadingType === "email" ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.primaryText}>Create Account</Text>
+                )}
+              </Pressable>
 
-              <Pressable style={styles.passwordToggle} onPress={() => setShowPassword((prev) => !prev)}>
-                <Text style={styles.passwordToggleText}>
-                  {showPassword ? "Hide" : "Show"}
+              {/* DIVIDER */}
+              <View style={styles.dividerRow}>
+                <View style={styles.divider} />
+                <Text style={styles.dividerText}>OR</Text>
+                <View style={styles.divider} />
+              </View>
+
+              {/* GOOGLE */}
+              <Pressable style={styles.googleButton} onPress={handleGoogle}>
+                <AntDesign name="google" size={18} />
+                <Text style={styles.googleText}> Continue with Google</Text>
+              </Pressable>
+
+              {/* LINK */}
+              <Pressable onPress={() => router.push("/(auth)/login")}>
+                <Text style={styles.link}>
+                  Already have an account?{" "}
+                  <Text style={styles.linkStrong}>Sign in</Text>
                 </Text>
               </Pressable>
             </View>
-          </View>
-
-          {/* SIGNUP BUTTON */}
-          <Pressable
-            style={({ pressed }) => [
-              styles.primaryButton,
-              (pressed || isLoading) && styles.buttonPressed,
-              isLoading && styles.buttonDisabled,
-            ]}
-            onPress={handleSignup}
-            disabled={isLoading}
-          >
-            {loadingType === "email" ? (
-              <ActivityIndicator color="#FFFFFF" />
-            ) : (
-              <Text style={styles.primaryButtonText}>Create Account</Text>
-            )}
-          </Pressable>
-
-          {/* DIVIDER */}
-          <View style={styles.dividerRow}>
-            <View style={styles.divider} />
-            <Text style={styles.dividerText}>or</Text>
-            <View style={styles.divider} />
-          </View>
-
-          {/* GOOGLE */}
-          <Pressable
-            style={({ pressed }) => [
-              styles.googleButton,
-              (pressed || isLoading) && styles.buttonPressed,
-              isLoading && styles.buttonDisabled,
-            ]}
-            onPress={handleGoogle}
-            disabled={isLoading}
-          >
-            {loadingType === "google" ? (
-              <ActivityIndicator color={COLORS.text} />
-            ) : (
-              <Text style={styles.googleButtonText}>Continue with Google</Text>
-            )}
-          </Pressable>
-
-          <Text style={styles.privacyText}>
-            Your Memora account helps keep your saved data connected and easy to retrieve anytime.
-          </Text>
+          </ScrollView>
+        </Animated.View>
         </View>
-
-        {/* LOGIN LINK */}
-        <Pressable
-          onPress={() => router.push("/(auth)/login")}
-          disabled={isLoading}
-          style={({ pressed }) => [styles.footerLinkWrap, pressed && styles.buttonPressed]}
-        >
-          <Text style={styles.link}>
-            Already have an account? <Text style={styles.linkStrong}>Sign in</Text>
-          </Text>
-        </Pressable>
-      </ScrollView>
+      </SafeAreaView>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  wrapper: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-  },
-  scrollContent: {
-    flexGrow: 1,
-    justifyContent: "center",
-    paddingHorizontal: 24,
-    paddingVertical: 32,
-  },
-  hero: {
-    marginBottom: 28,
-  },
-  badge: {
-    alignSelf: "flex-start",
-    backgroundColor: COLORS.card,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 999,
-    marginBottom: 18,
-  },
-  badgeText: {
-    color: COLORS.primary,
-    fontSize: 12,
-    fontWeight: "700",
-    letterSpacing: 1,
-  },
-  title: {
-    fontSize: 34,
-    fontWeight: "800",
-    color: COLORS.text,
-    marginBottom: 10,
-  },
-  subtitle: {
-    fontSize: 16,
-    lineHeight: 24,
-    color: COLORS.textSecondary,
-  },
-  card: {
-    backgroundColor: COLORS.card,
-    borderRadius: 20,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: COLORS.border,
+  wrapper: { flex: 1, backgroundColor: COLORS.background },
+  safeArea: { flex: 1 },
+  container: { flex: 1, paddingHorizontal: 20 },
+
+  // ✅ dynamic onboarding (flexShrink allows natural sizing)
+  onboardingSection: {
+    flexShrink: 1,
+    minHeight: 160,
+    maxHeight: 280,
     marginBottom: 24,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: COLORS.text,
-    marginBottom: 18,
-  },
-  inputGroup: {
-    marginBottom: 16,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: COLORS.textSecondary,
-    marginBottom: 8,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 15,
-    fontSize: 16,
-    color: COLORS.text,
-    backgroundColor: COLORS.background,
+    justifyContent: "center",
   },
 
-  /* PASSWORD FIXED */
-  passwordContainer: {
+  // ✅ form fills remaining space
+  formWrapper: {
+    flex: 1,
+  },
+
+  formContent: {
+    padding: 20,
+    paddingBottom: 60,
+  },
+
+  card: {
+    backgroundColor: COLORS.card,
+    borderRadius: 24,
+    padding: 22,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+
+  title: { fontSize: 22, fontWeight: "700", color: COLORS.text },
+  subtitle: { fontSize: 14, color: COLORS.textSecondary, marginBottom: 20 },
+
+  inputWrapper: {
     flexDirection: "row",
     alignItems: "center",
     borderWidth: 1,
     borderColor: COLORS.border,
     borderRadius: 14,
-    paddingHorizontal: 14,
-    backgroundColor: COLORS.background,
-    minHeight: 56,
+    paddingHorizontal: 12,
+    marginBottom: 12,
   },
-  passwordInput: {
+
+  inputFocused: {
+    borderColor: COLORS.primary,
+    shadowColor: COLORS.primary,
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+  },
+
+  input: {
     flex: 1,
-    paddingVertical: 15,
-    paddingHorizontal: 0,
+    padding: 12,
     fontSize: 16,
     color: COLORS.text,
-    backgroundColor: "transparent",
   },
-  passwordToggle: {
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    borderRadius: 10,
-    backgroundColor: COLORS.card,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  passwordToggleText: {
+
+  toggleText: {
     color: COLORS.primary,
-    fontWeight: "700",
+    fontWeight: "600",
+  },
+
+  error: {
+    color: "red",
+    marginBottom: 10,
   },
 
   primaryButton: {
     backgroundColor: COLORS.primary,
-    paddingVertical: 16,
+    padding: 16,
     borderRadius: 14,
     alignItems: "center",
-    justifyContent: "center",
-    marginTop: 8,
   },
-  primaryButtonText: {
-    color: "#FFFFFF",
-    fontSize: 17,
-    fontWeight: "700",
-  },
+
+  primaryText: { color: "#fff", fontWeight: "700" },
+
   dividerRow: {
     flexDirection: "row",
     alignItems: "center",
     marginVertical: 18,
   },
-  divider: {
-    flex: 1,
-    height: 1,
-    backgroundColor: COLORS.border,
-  },
-  dividerText: {
-    marginHorizontal: 12,
-    color: COLORS.textSecondary,
-    fontSize: 13,
-  },
+
+  divider: { flex: 1, height: 1, backgroundColor: COLORS.border },
+
+  dividerText: { marginHorizontal: 10, color: COLORS.textSecondary },
+
   googleButton: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
     borderWidth: 1,
     borderColor: COLORS.border,
-    paddingVertical: 16,
+    padding: 16,
     borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: COLORS.background,
   },
-  googleButtonText: {
-    color: COLORS.text,
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  privacyText: {
-    marginTop: 16,
-    color: COLORS.textSecondary,
-    fontSize: 13,
-    textAlign: "center",
-  },
-  footerLinkWrap: {
-    alignItems: "center",
-    marginTop: 20,
-  },
+
+  googleText: { fontWeight: "600", color: COLORS.text },
+
   link: {
+    textAlign: "center",
+    marginTop: 14,
     color: COLORS.textSecondary,
-    fontSize: 15,
   },
+
   linkStrong: {
     color: COLORS.primary,
     fontWeight: "700",
   },
-  buttonPressed: {
-    opacity: 0.85,
-  },
-  buttonDisabled: {
-    opacity: 0.7,
-  },
-  center: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: COLORS.background,
-  },
-  loadingText: {
-    color: COLORS.text,
-    fontSize: 16,
-    marginTop: 14,
-  },
+
+  buttonDisabled: { opacity: 0.7 },
+
+  center: { flex: 1, justifyContent: "center", alignItems: "center" },
+
+  loadingText: { marginTop: 10, color: COLORS.text },
 });

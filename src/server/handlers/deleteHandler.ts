@@ -234,7 +234,7 @@ async function findMatchingFiles(
  * Deletes a single record. For images/documents also removes from storage
  * and decrements the user's storage usage.
  */
-async function deleteRecord(
+export async function deleteRecord(
   userId: string,
   record: MatchedRecord
 ): Promise<{ success: boolean; error?: string }> {

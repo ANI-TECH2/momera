@@ -194,7 +194,7 @@ function bestTextSimilarity(query: string, texts: string[]): number {
 // Spelling mistake detection
 // ─────────────────────────────────────────────
 
-function detectPotentialSpellingMistake(query: string): boolean {
+export function detectPotentialSpellingMistake(query: string): boolean {
   const normalized = normalizeForFuzzy(query);
   if (normalized.length < 3) return false;
 
