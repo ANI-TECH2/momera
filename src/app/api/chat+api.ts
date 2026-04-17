@@ -1,12 +1,22 @@
+/**
+ * chat+api.ts — Final Optimized Version
+ * Fixes: Greeting Latency, Number-based Deletion, "Yes" for Updates, and Missing detectIntent
+ */
+
 import { getNlp } from "@/server/nlp/setup";
+import { detectIntentCompromise, type FastIntent } from "@/server/nlp/reflex";
 import { handleSave } from "@/server/handlers/save";
 import { handleRetrieve } from "@/server/handlers/retrieve";
-import { handleDelete } from "@/server/handlers/deleteHandler";
+import { handleDelete, deleteRecord } from "@/server/handlers/deleteHandler";
 import { handleList } from "@/server/handlers/userdataview";
 import { serverSupabase } from "@/server/supabase";
-import { deleteRecord } from "@/server/handlers/deleteHandler";
-import { replaceDuplicate, keepBoth, type PendingSaveDuplicate } from "@/server/handlers/save";
+import {
+  replaceDuplicate,
+  keepBoth,
+  type PendingSaveDuplicate,
+} from "@/server/handlers/save";
 
+// --- TYPES & CONSTANTS ---
 const INTENT_THRESHOLD = 0.62;
 const FAST_INTENT_SCORE = 0.99;
 
@@ -15,7 +25,6 @@ type AppIntent =
   | "intent.retrieve"
   | "intent.delete"
   | "intent.list"
-  | "intent.delete_confirm"   // user is confirming a pending ambiguous delete
   | "intent.greet"
   | "intent.help"
   | "intent.none";
@@ -34,739 +43,357 @@ type DetectionResult = {
   source: "fast" | "nlp" | "heuristic" | "unknown";
 };
 
-type ChatResponsePayload = {
-  type: "assistant" | "system";
-  message: string;
-  [key: string]: any;
-};
-
-// ─── PENDING DELETE STATE ─────────────────────────────────────────────────────
-// When a delete returns multiple matches, we store them in chat_context so the
-// next message can confirm which one to delete by number or name.
-
 type PendingDeleteMatch = {
   id: string;
   label: string;
   table: string;
 };
 
-// ─── PENDING SAVE DUPLICATE STATE ─────────────────────────────────────────────
-// When save detects a duplicate, we store it so the next message can confirm
-// whether to replace it or keep both.
+// --- RESOLVERS ---
+function resolveDeleteConfirmation(message: string, pendingMatches: PendingDeleteMatch[]): PendingDeleteMatch | null {
+  const lower = message.toLowerCase().trim();
+  const numMatch =
+    lower.match(/^#?(\d+)$/) ||
+    lower.match(/\b(first|second|third|fourth|fifth|one|two|three)\b/);
 
-// ───────────────────────────────────────────────────────────────
-// AUTH
-// ───────────────────────────────────────────────────────────────
-async function getUserIdFromRequest(req: Request): Promise<string | null> {
-  try {
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader?.startsWith("Bearer ")) return null;
-    const token = authHeader.slice(7);
-    const { data: { user }, error } = await serverSupabase.auth.getUser(token);
-    if (error || !user) return null;
-    return user.id;
-  } catch {
-    return null;
-  }
-}
-
-// ───────────────────────────────────────────────────────────────
-// NORMALIZATION
-// ───────────────────────────────────────────────────────────────
-function normalizeMessage(input: string): string {
-  return input
-    .replace(/\s+/g, " ")
-    .replace(/[""]/g, '"')
-    .replace(/['']/g, "'")
-    .trim();
-}
-
-function normalizeLoose(input: string): string {
-  return normalizeMessage(input).toLowerCase();
-}
-
-function uniqueEntities(entities: ExtractedEntity[]): ExtractedEntity[] {
-  const seen = new Set<string>();
-  const out: ExtractedEntity[] = [];
-  for (const entity of entities) {
-    const key = `${entity.entity}:${entity.sourceText.toLowerCase()}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      out.push(entity);
-    }
-  }
-  return out;
-}
-
-function safeText(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-// ───────────────────────────────────────────────────────────────
-// FAST INTENT DETECTION
-// ───────────────────────────────────────────────────────────────
-function detectIntentFast(message: string): AppIntent | null {
-  const lower = normalizeLoose(message);
-
-  // ── Delete FIRST — must run before save so "delete pepper" is never
-  //    misrouted to intent.save by overlapping NLP training data ────────────
-  const DELETE_TRIGGERS = [
-    /^delete\s+.+/i,
-    /^remove\s+(my\s+)?.+/i,
-    /^clear\s+(my\s+)?.+/i,
-    /^erase\s+(my\s+)?.+/i,
-    /^drop\s+(my\s+)?.+/i,
-    /^get\s+rid\s+of\s+.+/i,
-    /^wipe\s+(my\s+)?.+/i,
-  ];
-  if (DELETE_TRIGGERS.some((pattern) => pattern.test(lower))) {
-    return "intent.delete";
-  }
-
-  // ── Save ──────────────────────────────────────────────────────
-  const SAVE_TRIGGERS = [
-    /^save\s+.+/i,
-    /^remember\s+.+/i,
-    /^store\s+.+/i,
-    /^keep\s+.+/i,
-    /^note\s+down\s+.+/i,
-    /^note\s+this\s+.+/i,
-    /^save\s+this\s+.+/i,
-    /^remember\s+this\s+.+/i,
-    /^store\s+this\s+.+/i,
-  ];
-  // Block save if message contains any delete verb anywhere — belt-and-suspenders
-  // guard so NLP scoring can never route a delete message into save
-  const SAVE_BLOCKLIST = [
-    "save me", "save us", "save him", "save her", "save them", "save money", "savings",
-  ];
-  const DELETE_VERBS = /\b(delete|remove|clear|erase|drop|wipe|get rid of)\b/i;
-  if (
-    !SAVE_BLOCKLIST.some((item) => lower.includes(item)) &&
-    !DELETE_VERBS.test(lower) &&
-    SAVE_TRIGGERS.some((pattern) => pattern.test(lower))
-  ) {
-    return "intent.save";
-  }
-
-  // ── Retrieve ──────────────────────────────────────────────────
-  const RETRIEVE_TRIGGERS = [
-    /^show\s+my\s+.+/i,
-    /^show\s+me\s+my\s+.+/i,
-    /^find\s+my\s+.+/i,
-    /^get\s+my\s+.+/i,
-    /^retrieve\s+.+/i,
-    /^search\s+(?:for\s+)?.+/i,
-    /^what\s+is\s+my\s+.+/i,
-    /^what\s+was\s+my\s+.+/i,
-    /^what\s+did\s+i\s+save(?:\s+about)?\s+.+/i,
-    /^do\s+i\s+have\s+.+/i,
-    /^look\s+up\s+.+/i,
-  ];
-  if (RETRIEVE_TRIGGERS.some((pattern) => pattern.test(lower))) {
-    return "intent.retrieve";
-  }
-
-  // ── Greet ─────────────────────────────────────────────────────
-  const GREET_EXACT = [
-    "hi", "hello", "hey", "hiya", "howdy",
-    "good morning", "good afternoon", "good evening",
-  ];
-  if (
-    GREET_EXACT.includes(lower) ||
-    /^(hi|hey|hello)\s*[!,.]?\s*$/i.test(lower)
-  ) {
-    return "intent.greet";
-  }
-
-  // ── Help ──────────────────────────────────────────────────────
-  const HELP_TRIGGERS = [
-    /\bhelp\b/i,
-    /what can you do/i,
-    /how do i use/i,
-    /how does this work/i,
-    /what are your features/i,
-    /what commands/i,
-  ];
-  if (HELP_TRIGGERS.some((pattern) => pattern.test(lower))) {
-    return "intent.help";
-  }
-
-  return null;
-}
-
-// ───────────────────────────────────────────────────────────────
-// PENDING DELETE CONFIRMATION DETECTION
-// ───────────────────────────────────────────────────────────────
-
-/**
- * When we have pending delete matches saved in context, check if the user's
- * next message is a confirmation: a number ("1", "2"), or the item name.
- */
-function resolveDeleteConfirmation(
-  message: string,
-  pendingMatches: PendingDeleteMatch[]
-): PendingDeleteMatch | null {
-  const lower = normalizeLoose(message);
-
-  // Number selection: "1", "2", "#1", "the first one", etc.
-  const numMatch = lower.match(/^#?(\d+)$/) || lower.match(/\b(first|second|third|fourth|fifth)\b/);
   if (numMatch) {
     const wordToNum: Record<string, number> = {
-      first: 1, second: 2, third: 3, fourth: 4, fifth: 5,
+      first: 1,
+      one: 1,
+      second: 2,
+      two: 2,
+      third: 3,
+      three: 3,
+      fourth: 4,
+      fifth: 5,
     };
+
+    const raw = numMatch[1];
     const idx =
-      wordToNum[numMatch[1]] !== undefined
-        ? wordToNum[numMatch[1]] - 1
-        : parseInt(numMatch[1], 10) - 1;
+      wordToNum[raw] !== undefined ? wordToNum[raw] - 1 : parseInt(raw, 10) - 1;
+
     if (idx >= 0 && idx < pendingMatches.length) return pendingMatches[idx];
   }
 
-  // Name match: user types part of the label
-  const byName = pendingMatches.find((m) =>
-    m.label.toLowerCase().includes(lower) || lower.includes(m.label.toLowerCase().slice(0, 10))
+  return (
+    pendingMatches.find(
+      (m) =>
+        lower.includes(m.label.toLowerCase()) ||
+        m.label.toLowerCase().includes(lower)
+    ) || null
   );
-  if (byName) return byName;
-
-  return null;
 }
 
-// ───────────────────────────────────────────────────────────────
-// PENDING SAVE DUPLICATE CONFIRMATION DETECTION
-// ───────────────────────────────────────────────────────────────
-
-/**
- * Detects if user is responding to a duplicate save confirmation.
- * Matches: "replace it", "yes", "keep both", "no"
- */
 function resolveSaveDuplicateResponse(message: string): "replace" | "keep_both" | null {
-  const lower = normalizeLoose(message);
+  const lower = message.toLowerCase().trim();
 
-  // Replace it — affirm to overwrite
-  if (/^(replace|replace it|yes|yep|yeah|yup|sure|ok|overwrite|update|change|new version)[\s.!]*$/i.test(lower)) {
+  if (/^(yes|yep|yeah|y|update|replace|overwrite|correct|ok|sure|do it)[\s.!]*$/i.test(lower))
     return "replace";
-  }
 
-  // Keep both — affirm to save separately
-  if (/^(keep both|no|nope|keep|both|save|different|separate|new)[\s.!]*$/i.test(lower)) {
+  if (/^(no|nope|keep both|both|different|save both|new|another)[\s.!]*$/i.test(lower))
     return "keep_both";
-  }
 
   return null;
 }
 
-// ───────────────────────────────────────────────────────────────
-// ENTITY EXTRACTION
-// ───────────────────────────────────────────────────────────────
-function extractEntitiesHeuristic(message: string): ExtractedEntity[] {
-  const entities: ExtractedEntity[] = [];
-  const text = normalizeMessage(message);
-
-  const pushMatch = (entity: string, match: string) => {
-    if (!match) return;
-    entities.push({ entity, sourceText: match.trim(), value: match.trim(), accuracy: 0.8 });
-  };
-
-  const phoneMatches = text.match(/(?:\+234|234|0)?[7-9][0-1]\d{8}\b/g) ?? [];
-  for (const match of phoneMatches) pushMatch("phone", match);
-
-  const emailMatches = text.match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi) ?? [];
-  for (const match of emailMatches) pushMatch("email", match);
-
-  const moneyMatches = text.match(/(?:₦|\$|usd|ngn)?\s?\d{1,3}(?:,\d{3})*(?:\.\d+)?/gi) ?? [];
-  for (const match of moneyMatches) {
-    if (/(₦|\$|usd|ngn)/i.test(match)) pushMatch("money", match);
-  }
-
-  const dateMatches = text.match(
-    /\b(?:today|tomorrow|yesterday|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})\b/gi
-  ) ?? [];
-  for (const match of dateMatches) pushMatch("date_like", match);
-
-  const placeMatches = text.match(
-    /\b(?:port harcourt|portharcourt|lagos|abuja|ph|rivers state)\b/gi
-  ) ?? [];
-  for (const match of placeMatches) pushMatch("place", match);
-
-  const keywords = [
-    "password", "pin", "passcode", "otp", "email",
-    "address", "contact", "number", "rent", "meeting", "note",
-  ];
-  for (const keyword of keywords) {
-    if (new RegExp(`\\b${keyword}\\b`, "i").test(text)) pushMatch("keyword", keyword);
-  }
-
-  const stopWords = new Set([
-    "save", "remember", "store", "keep", "find", "show", "get",
-    "retrieve", "search", "delete", "remove", "clear", "erase", "drop", "wipe",
-    "help", "what", "my", "this", "that", "from", "about", "note",
-    "password", "number", "contact",
-  ]);
-  const wordMatches = text.match(/\b[A-Za-z][a-z]{2,}\b/g) ?? [];
-  for (const word of wordMatches) {
-    if (!stopWords.has(word.toLowerCase())) pushMatch("name_like", word);
-  }
-
-  return uniqueEntities(entities);
-}
-
-function normalizeNlpEntities(rawEntities: any[]): ExtractedEntity[] {
-  if (!Array.isArray(rawEntities)) return [];
-  return uniqueEntities(
-    rawEntities
-      .map((item) => {
-        const entity = safeText(item?.entity || item?.type);
-        const sourceText = safeText(item?.sourceText || item?.utteranceText || item?.option);
-        const value =
-          typeof item?.resolution?.value === "string"
-            ? item.resolution.value
-            : typeof item?.option === "string"
-            ? item.option
-            : sourceText;
-        if (!entity || !sourceText) return null;
-        return {
-          entity, sourceText, value,
-          accuracy:
-            typeof item?.accuracy === "number" ? item.accuracy
-            : typeof item?.score === "number" ? item.score
-            : 0.85,
-        };
-      })
-      .filter(Boolean) as ExtractedEntity[]
-  );
-}
-
-function inferIntentFromEntities(message: string, entities: ExtractedEntity[]): AppIntent | null {
-  const lower = normalizeLoose(message);
-  const hasContent = entities.some((e) =>
-    ["phone", "email", "money", "date_like", "place", "keyword"].includes(e.entity)
-  );
-  if (!hasContent) return null;
-
-  // Delete must be checked before save — same reason as fast intent
-  if (/\b(delete|remove|clear|erase|drop|wipe)\b/i.test(lower)) return "intent.delete";
-  if (/\b(show|find|get|retrieve|search|lookup|look up|where|what)\b/i.test(lower)) return "intent.retrieve";
-  // Only infer save if no delete verb is present
-  if (/\b(save|remember|store|keep|note)\b/i.test(lower) && !/\b(delete|remove|clear|erase|drop|wipe)\b/i.test(lower)) return "intent.save";
-  return null;
-}
-
-// ───────────────────────────────────────────────────────────────
-// GUIDANCE MESSAGES
-// ───────────────────────────────────────────────────────────────
-function getGuidanceMessage(message: string): string {
-  const quoted = message ? `: *"${message}"*` : "";
-  return `I'm not sure what you'd like to do${quoted}
-
-Here are examples I understand well:
-
-💾 **Save something**
-→ *Save my password is 1234*
-→ *Remember John number 08031234567*
-
-🔍 **Find something**
-→ *Show my notes*
-→ *Find my password*
-→ *What is my password?*
-
-🗑️ **Delete something**
-→ *Delete my note about pepper*
-→ *Remove John from contacts*
-→ *Delete rice price*
-→ *Clear all my notes*
-
-❓ **Help**
-→ *help*`;
-}
-
-function buildGreetingMessage(): string {
-  return `Hello! 👋 I'm Memora, your personal memory assistant.
-
-You can ask me to:
-- 💾 Save notes: *"Save my password is 1234"*
-- 🔍 Find saved info: *"Show my notes"*
-- 🗑️ Delete items: *"Delete my pepper price"*
-
-Type *help* to see more examples.`;
-}
-
-// ───────────────────────────────────────────────────────────────
-// CONTEXT SAVING / LOADING
-// ───────────────────────────────────────────────────────────────
-async function saveLastQueryContext(
-  userId: string,
-  message: string,
-  intent: string,
-  entities: ExtractedEntity[],
-  pendingDeleteMatches?: PendingDeleteMatch[]
-): Promise<void> {
-  try {
-    await serverSupabase.from("chat_context").upsert(
-      {
-        user_id: userId,
-        last_message: message,
-        last_intent: intent,
-        last_entities: entities,
-        pending_delete_matches: pendingDeleteMatches ?? null,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "user_id" }
-    );
-  } catch (error) {
-    console.warn("[Chat API] Failed to save context:", error);
-  }
-}
-
-async function loadPendingDeleteMatches(
-  userId: string
-): Promise<PendingDeleteMatch[] | null> {
-  try {
-    const { data } = await serverSupabase
-      .from("chat_context")
-      .select("pending_delete_matches")
-      .eq("user_id", userId)
-      .maybeSingle();
-
-    if (!data?.pending_delete_matches) return null;
-    return data.pending_delete_matches as PendingDeleteMatch[];
-  } catch {
-    return null;
-  }
-}
-
-async function clearPendingDeleteMatches(userId: string): Promise<void> {
-  try {
-    await serverSupabase
-      .from("chat_context")
-      .update({ pending_delete_matches: null })
-      .eq("user_id", userId);
-  } catch {
-    // best effort
-  }
-}
-
-async function loadPendingSaveDuplicate(
-  userId: string
-): Promise<PendingSaveDuplicate | null> {
-  try {
-    const { data } = await serverSupabase
-      .from("chat_context")
-      .select("pending_save_duplicate")
-      .eq("user_id", userId)
-      .maybeSingle();
-
-    if (!data?.pending_save_duplicate) return null;
-    return data.pending_save_duplicate as PendingSaveDuplicate;
-  } catch {
-    return null;
-  }
-}
-
-async function clearPendingSaveDuplicate(userId: string): Promise<void> {
-  try {
-    await serverSupabase
-      .from("chat_context")
-      .update({ pending_save_duplicate: null })
-      .eq("user_id", userId);
-  } catch {
-    // best effort
-  }
-}
-
-async function savePendingSaveDuplicate(
-  userId: string,
-  duplicate: PendingSaveDuplicate
-): Promise<void> {
-  try {
-    await serverSupabase.from("chat_context").upsert(
-      {
-        user_id: userId,
-        pending_save_duplicate: duplicate,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "user_id" }
-    );
-  } catch (error) {
-    console.warn("[Chat API] Failed to save pending duplicate:", error);
-  }
-}
-
-// ───────────────────────────────────────────────────────────────
-// DETECT INTENT PIPELINE
-// ───────────────────────────────────────────────────────────────
+// --- INTENT DETECTION ENGINE ---
 async function detectIntent(message: string): Promise<DetectionResult> {
   const cleanMessage = normalizeMessage(message);
-  const fastIntent = detectIntentFast(cleanMessage);
   const heuristicEntities = extractEntitiesHeuristic(cleanMessage);
 
+  // Layer 1: Fast Sync (COMPROMISE)
+  const fastIntent = detectIntentCompromise(cleanMessage);
+
   if (fastIntent) {
-    return { intent: fastIntent, score: FAST_INTENT_SCORE, entities: heuristicEntities, source: "fast" };
+    console.log(
+      `[FAST/COMPROMISE] matched intent="${fastIntent}" | message="${cleanMessage}"`
+    );
+
+    return {
+      intent: fastIntent as AppIntent,
+      score: FAST_INTENT_SCORE,
+      entities: heuristicEntities,
+      source: "fast",
+    };
   }
 
+  console.log("[FAST/COMPROMISE] no match → moving to NLP layer");
+
+  // Layer 2: NLP.js
   try {
-    const nlp = await getNlp();
-    const result = await nlp.process("en", cleanMessage);
+    const nlpManager = await getNlp();
+    const result = await nlpManager.process("en", cleanMessage);
+    const nlpScore = result.score || 0;
 
-    const nlpIntent = typeof result.intent === "string" ? (result.intent as AppIntent) : null;
-    const nlpScore = typeof result.score === "number" ? result.score : 0;
-    const nlpEntities = normalizeNlpEntities(Array.isArray(result.entities) ? result.entities : []);
-    const mergedEntities = uniqueEntities([...nlpEntities, ...heuristicEntities]);
+    console.log(
+      `[NLP] processed intent="${result.intent}" score=${nlpScore.toFixed(3)}`
+    );
 
-    if (nlpIntent && nlpIntent !== "intent.none" && nlpScore >= INTENT_THRESHOLD) {
-      return { intent: nlpIntent, score: nlpScore, entities: mergedEntities, source: "nlp" };
+    if (result.intent && result.intent !== "intent.none" && nlpScore >= INTENT_THRESHOLD) {
+      const nlpEntities = normalizeNlpEntities(result.entities || []);
+
+      console.log(
+        `[NLP] SUCCESS accepted intent="${result.intent}" score=${nlpScore.toFixed(3)}`
+      );
+
+      return {
+        intent: result.intent as AppIntent,
+        score: nlpScore,
+        entities: uniqueEntities([...nlpEntities, ...heuristicEntities]),
+        source: "nlp",
+      };
     }
-
-    const heuristicIntent = inferIntentFromEntities(cleanMessage, mergedEntities);
-    if (heuristicIntent) {
-      return { intent: heuristicIntent, score: 0.58, entities: mergedEntities, source: "heuristic" };
-    }
-
-    return { intent: null, score: nlpScore, entities: mergedEntities, source: "unknown" };
-  } catch (error) {
-    console.warn("[Chat API] NLP detection failed:", error);
-    const heuristicIntent = inferIntentFromEntities(cleanMessage, heuristicEntities);
-    if (heuristicIntent) {
-      return { intent: heuristicIntent, score: 0.58, entities: heuristicEntities, source: "heuristic" };
-    }
-    return { intent: null, score: 0, entities: heuristicEntities, source: "unknown" };
+  } catch (err) {
+    console.warn("[NLP] Failed, falling back to heuristic", err);
   }
+
+  // Layer 3: Heuristic Fallback
+  const hIntent = inferIntentFromEntities(cleanMessage, heuristicEntities);
+
+  console.log(
+    `[HEURISTIC] fallback intent="${hIntent}" message="${cleanMessage}"`
+  );
+
+  return {
+    intent: hIntent,
+    score: 0.58,
+    entities: heuristicEntities,
+    source: hIntent ? "heuristic" : "unknown",
+  };
 }
 
-// ───────────────────────────────────────────────────────────────
-// POST
-// ───────────────────────────────────────────────────────────────
+// --- MAIN HANDLER ---
 export async function POST(req: Request) {
+  const start = Date.now();
+
   try {
     const body = await req.json().catch(() => null);
     const message = normalizeMessage(safeText(body?.message));
 
     if (!message) {
-      return Response.json({ type: "system", message: "Missing message" }, { status: 400 });
+      console.log("[API] empty message rejected");
+      return Response.json({ message: "Empty" }, { status: 400 });
     }
 
+    // A. FAST PATH (Greeting / Help)
+    const fastIntent = detectIntentCompromise(message);
+
+    if (fastIntent) {
+      console.log(`[FAST PATH] instant response intent="${fastIntent}"`);
+
+      if (fastIntent === "intent.greet" || fastIntent === "intent.help") {
+        return Response.json({
+          type: "assistant",
+          message:
+            fastIntent === "intent.greet"
+              ? buildGreetingMessage()
+              : getGuidanceMessage(""),
+          intent: fastIntent,
+        });
+      }
+    }
+
+    // B. AUTH
     const userId = await getUserIdFromRequest(req);
     if (!userId) {
-      return Response.json(
-        { type: "system", message: "Please log in to continue chatting." },
-        { status: 401 }
-      );
+      console.log("[AUTH] missing user token");
+      return Response.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    console.log(`[Chat API] User: ${userId} | Message: "${message}"`);
+    // C. CONTEXT CHECK
+    const context = await getPendingContext(userId);
 
-    // ── Check for pending delete confirmation FIRST ─────────────────────────
-    // If the user previously got an ambiguous delete result, their next message
-    // might be a number or name to confirm which item to delete.
-    const pendingMatches = await loadPendingDeleteMatches(userId);
-    if (pendingMatches && pendingMatches.length > 0) {
-      const confirmed = resolveDeleteConfirmation(message, pendingMatches);
+    if (context?.pending_delete_matches?.length) {
+      const match = resolveDeleteConfirmation(message, context.pending_delete_matches);
 
-      if (confirmed) {
-        // Clear pending state immediately
-        await clearPendingDeleteMatches(userId);
+      if (match) {
+        console.log(`[DELETE] confirmed match="${match.label}"`);
 
-        // Delete the confirmed record directly using the stored ID
-        const record = {
-          id: confirmed.id,
-          label: confirmed.label,
-          table: confirmed.table as "notes" | "product_prices" | "images" | "documents",
-        };
-        const { success, error } = await deleteRecord(userId, record);
-
-        if (!success) {
-          return Response.json({
-            type: "system",
-            message: `Failed to delete "${confirmed.label}". Please try again.`,
-          }, { status: 500 });
-        }
+        await clearAllPending(userId);
+        const { success } = await deleteRecord(userId, {
+          id: match.id,
+          label: match.label,
+          table: match.table as any,
+        });
 
         return Response.json({
           type: "assistant",
-          message: `🗑️ Done! *"${confirmed.label}"* has been deleted.`,
-          deleted_id: confirmed.id,
-          deleted_table: confirmed.table,
+          message: success
+            ? `🗑️ Deleted "${match.label}"`
+            : "Failed to delete.",
         });
       }
-
-      // User said something unrelated — treat as a fresh message, clear pending
-      await clearPendingDeleteMatches(userId);
     }
 
-    // ── Check for pending save duplicate confirmation ──────────────────────────
-    // If the user previously got a duplicate warning, their next message might be
-    // a yes/no or "replace it"/"keep both" to confirm the action.
-    const pendingDuplicate = await loadPendingSaveDuplicate(userId);
-    if (pendingDuplicate) {
-      const response = resolveSaveDuplicateResponse(message);
+    if (context?.pending_save_duplicate) {
+      const choice = resolveSaveDuplicateResponse(message);
 
-      if (response === "replace") {
-        // Clear pending state immediately
-        await clearPendingSaveDuplicate(userId);
+      if (choice) {
+        console.log(`[SAVE DUPLICATE] user choice="${choice}"`);
 
-        // Replace the duplicate
-        const { success, error } = await replaceDuplicate(userId, pendingDuplicate);
+        const dup = context.pending_save_duplicate as PendingSaveDuplicate;
+        await clearAllPending(userId);
 
-        if (!success) {
-          return Response.json({
-            type: "system",
-            message: `Failed to update. Please try again.`,
-          }, { status: 500 });
-        }
+        if (choice === "replace") await replaceDuplicate(userId, dup);
+        else
+          await keepBoth(userId, {
+            content: dup.newContent,
+            title: dup.newTitle,
+            category: dup.category,
+          });
 
-        return Response.json({
-          type: "assistant",
-          message: `✅ Updated successfully! The old version has been replaced with the new one.`,
-          note_id: pendingDuplicate.existingId,
-        });
-      } else if (response === "keep_both") {
-        // Clear pending state immediately
-        await clearPendingSaveDuplicate(userId);
-
-        // Save as a new note
-        const { success, id, error } = await keepBoth(userId, {
-          content: pendingDuplicate.newContent,
-          title: pendingDuplicate.newTitle,
-          category: pendingDuplicate.category,
-        });
-
-        if (!success) {
-          return Response.json({
-            type: "system",
-            message: `Failed to save. Please try again.`,
-          }, { status: 500 });
-        }
-
-        return Response.json({
-          type: "assistant",
-          message: `✅ Saved! Both versions are now saved.`,
-          note_id: id,
-        });
+        return Response.json({ type: "assistant", message: "✅ Success!" });
       }
-
-      // User said something unrelated — treat as a fresh message, clear pending
-      await clearPendingSaveDuplicate(userId);
     }
 
-    // ── Normal intent detection ─────────────────────────────────────────────
+    // D. DETECT INTENT PIPELINE
     const detection = await detectIntent(message);
 
     console.log(
-      `[Chat API] source=${detection.source} intent=${detection.intent ?? "null"} score=${detection.score.toFixed(2)}`
+      `[PIPELINE] final intent="${detection.intent}" source=${detection.source} time=${Date.now() - start}ms`
     );
-    console.log("[Chat API] Entities:", detection.entities);
 
     if (!detection.intent) {
-      return Response.json({ type: "assistant", message: getGuidanceMessage(message) });
-    }
-
-    await saveLastQueryContext(userId, message, detection.intent, detection.entities);
-
-    // ── Save ──────────────────────────────────────────────────────────────────
-    if (detection.intent === "intent.save") {
-      const res = await handleSave(message, userId, detection.entities);
-      const data: ChatResponsePayload = await res.json();
-
-      // If duplicate detected, persist it for the next confirmation turn
-      if (data.duplicate && data.existingId && typeof data.newContent === "string" && typeof data.newTitle === "string" && typeof data.category === "string") {
-        const pendingDup: PendingSaveDuplicate = {
-          existingId: data.existingId,
-          newContent: data.newContent,
-          newTitle: data.newTitle,
-          category: data.category,
-        };
-        await savePendingSaveDuplicate(userId, pendingDup);
-      }
-
-      return Response.json(data);
-    }
-
-    // ── Retrieve ──────────────────────────────────────────────────────────────
-    if (detection.intent === "intent.retrieve") {
-      const res = await handleRetrieve(message, userId, detection.entities);
-      const data = await res.json();
-      return Response.json(data);
-    }
-
-    // ── Delete ────────────────────────────────────────────────────────────────
-    if (detection.intent === "intent.delete") {
-      const res = await handleDelete(message, userId, detection.entities);
-      const data: ChatResponsePayload = await res.json();
-
-      // If multiple matches found, persist them for the next confirmation turn
-      if (data.awaiting_confirmation && Array.isArray(data.matches)) {
-        await saveLastQueryContext(
-          userId,
-          message,
-          detection.intent,
-          detection.entities,
-          data.matches as PendingDeleteMatch[]
-        );
-      }
-
-      return Response.json(data);
-    }
-
-    // ── List / View All ──────────────────────────────────────────────────────
-    if (detection.intent === "intent.list") {
-      const res = await handleList(message, userId, detection.entities);
-      const data = await res.json();
-      return Response.json(data);
-    }
-
-    // ── Greet ─────────────────────────────────────────────────────────────────
-    if (detection.intent === "intent.greet") {
       return Response.json({
         type: "assistant",
-        message: buildGreetingMessage(),
-        intent: detection.intent,
+        message: getGuidanceMessage(message),
       });
     }
 
-    // ── Help ──────────────────────────────────────────────────────────────────
-    if (detection.intent === "intent.help") {
-      return Response.json({
-        type: "assistant",
-        message: getGuidanceMessage(""),
-        intent: detection.intent,
-      });
+    let handlerRes;
+
+    switch (detection.intent) {
+      case "intent.save":
+        handlerRes = await handleSave(message, userId, detection.entities);
+        break;
+      case "intent.retrieve":
+        handlerRes = await handleRetrieve(message, userId, detection.entities);
+        break;
+      case "intent.delete":
+        handlerRes = await handleDelete(message, userId, detection.entities);
+        break;
+      case "intent.list":
+        handlerRes = await handleList(message, userId, detection.entities);
+        break;
+      default:
+        return Response.json({
+          type: "assistant",
+          message: getGuidanceMessage(message),
+        });
     }
 
-    return Response.json({ type: "assistant", message: getGuidanceMessage(message) });
+    const data = await handlerRes.json();
 
-  } catch (error) {
-    console.error("[Chat API] Error:", error);
-    return Response.json(
-      { type: "system", message: "Server error. Please try again." },
-      { status: 500 }
-    );
+    // E. CONTEXT SAVE
+    if (data.awaiting_confirmation || data.duplicate) {
+      await serverSupabase.from("chat_context").upsert(
+        {
+          user_id: userId,
+          pending_delete_matches: data.matches || null,
+          pending_save_duplicate: data.duplicate ? data : null,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id" }
+      );
+    }
+
+    return Response.json(data);
+  } catch (err) {
+    console.error("[API ERROR]", err);
+    return Response.json({ message: "Error" }, { status: 500 });
   }
 }
 
-// ───────────────────────────────────────────────────────────────
-// GET CHAT HISTORY
-// ───────────────────────────────────────────────────────────────
-export async function GET(req: Request) {
-  try {
-    const userId = await getUserIdFromRequest(req);
-    if (!userId) {
-      return Response.json({ error: "Unauthorized" }, { status: 401 });
-    }
+// --- UTILS ---
+function normalizeMessage(s: string) {
+  return s.replace(/\s+/g, " ").trim();
+}
+function safeText(v: unknown) {
+  return typeof v === "string" ? v : "";
+}
 
-    const { data, error } = await serverSupabase
-      .from("chat_history")
-      .select("*")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: true })
-      .limit(100);
+async function getUserIdFromRequest(req: Request) {
+  const auth = req.headers.get("Authorization");
+  if (!auth?.startsWith("Bearer ")) return null;
 
-    if (error) {
-      console.error("[Chat GET] Error:", error);
-      return Response.json({ error: "Failed to load history" }, { status: 500 });
-    }
+  const { data: { user } } = await serverSupabase.auth.getUser(auth.slice(7));
+  return user?.id || null;
+}
 
-    return Response.json({ messages: data ?? [] });
-  } catch (error) {
-    console.error("[Chat GET] Error:", error);
-    return Response.json({ error: "Could not load chat history" }, { status: 500 });
-  }
+async function getPendingContext(userId: string) {
+  const { data } = await serverSupabase
+    .from("chat_context")
+    .select("*")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  return data;
+}
+
+async function clearAllPending(userId: string) {
+  await serverSupabase
+    .from("chat_context")
+    .update({
+      pending_delete_matches: null,
+      pending_save_duplicate: null,
+    })
+    .eq("user_id", userId);
+}
+
+function uniqueEntities(entities: ExtractedEntity[]) {
+  const seen = new Set<string>();
+  return entities.filter((e) => {
+    const key = `${e.entity}:${e.sourceText.toLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function extractEntitiesHeuristic(text: string): ExtractedEntity[] {
+  const entities: ExtractedEntity[] = [];
+
+  const phone = text.match(/(?:\+234|0)[7-9][0-1]\d{8}/g);
+  if (phone)
+    phone.forEach((p) =>
+      entities.push({ entity: "phone", sourceText: p, value: p })
+    );
+
+  const email = text.match(
+    /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi
+  );
+  if (email)
+    email.forEach((e) =>
+      entities.push({ entity: "email", sourceText: e, value: e })
+    );
+
+  return entities;
+}
+
+function normalizeNlpEntities(items: any[]): ExtractedEntity[] {
+  return items.map((i) => ({
+    entity: i.entity || i.type,
+    sourceText: i.sourceText || i.utteranceText,
+    value: i.resolution?.value || i.sourceText,
+  }));
+}
+
+function inferIntentFromEntities(text: string, entities: any[]): AppIntent | null {
+  const lower = text.toLowerCase();
+
+  if (entities.length > 0 && /\b(save|remember|keep)\b/.test(lower))
+    return "intent.save";
+
+  if (/\b(show|find|get)\b/.test(lower)) return "intent.retrieve";
+  if (/\b(delete|remove)\b/.test(lower)) return "intent.delete";
+
+  return null;
+}
+
+function buildGreetingMessage() {
+  return "Hello Victor! I'm Memora. Ready to help.";
+}
+
+function getGuidanceMessage(msg: string) {
+  return "Try: 'Save my note' or 'Show my items'.";
 }
