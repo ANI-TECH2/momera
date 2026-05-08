@@ -16,6 +16,9 @@ const finalConfig = {
       '@react-native-async-storage/async-storage': '@react-native-async-storage/async-storage/react-native',
     },
     unstable_enableSymlinks: true,
+    resolveRequest: (context, moduleName, platform) => {
+      return context.resolveRequest(context, moduleName, platform);
+    },
   },
 };
 

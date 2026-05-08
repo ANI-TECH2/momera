@@ -4,13 +4,13 @@ import {
   detectCategory,
   generateHash,
   normalizeText,
-} from"@/server/helpers";
+} from "@/server/helpers";
 import { buildSaveReply } from "@/server/nlp/replyBuilder";
 import {
   detectBulkPriceList,
   handleBulkPriceSave,
 } from "@/server/handlers/bulkPriceSave";
-import { findExistingPrice, findExistingNote } from  "@/server/helpers/duplicatechecks";
+import { findExistingPrice, findExistingNote } from "@/server/helpers/duplicatechecks";
 import { ExtractedEntity } from "@/app/api/chat+api";
 
 type SaveEntity = ExtractedEntity;
@@ -25,8 +25,7 @@ export type PendingSaveDuplicate = {
 };
 
 // ─── INTENT KEYWORDS ─────────────────────────────────────────────────────────
-// Single source of truth for all intent/command words that must NEVER appear
-// in saved data (product names, note content, contact names, titles, etc.).
+
 const INTENT_VERB_PATTERN =
   /\b(save|store|remember|keep|add|note|write\s*down)\b/gi;
 
@@ -36,10 +35,6 @@ function safeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-/**
- * Strips ALL occurrences of intent verbs from text, not just leading ones.
- * Used as the single stripping pass before any data extraction or storage.
- */
 function stripIntentKeywords(text: string): string {
   return safeString(text)
     .replace(INTENT_VERB_PATTERN, " ")
@@ -47,10 +42,6 @@ function stripIntentKeywords(text: string): string {
     .trim();
 }
 
-/**
- * Strips only the leading intent verb (for routing decisions that need
- * to know "what came after the command").
- */
 function stripSaveCommand(text: string): string {
   return safeString(text)
     .replace(/^\s*(save|store|remember|keep|add|note|write\s*down)\b\s*/i, "")
@@ -104,15 +95,11 @@ function extractEmail(text: string): string {
 }
 
 function looksLikeCredential(text: string): boolean {
-  return /\b(password|passwd|secret|login|username|credential|passphrase|otp|2fa|token|api\s*key)\b/i.test(
-    text
-  );
+  return /\b(password|passwd|secret|login|username|credential|passphrase|otp|2fa|token|api\s*key)\b/i.test(text);
 }
 
 function looksLikeMeetingOrReminder(text: string): boolean {
-  return /\b(date|birthday|dob|born|appointment|meeting|schedule|reminder|anniversary|event)\b/i.test(
-    text
-  );
+  return /\b(date|birthday|dob|born|appointment|meeting|schedule|reminder|anniversary|event)\b/i.test(text);
 }
 
 function looksLikeBankOrIdInfo(text: string): boolean {
@@ -132,7 +119,6 @@ function extractContactName(text: string): string {
   const email = extractEmail(text);
 
   const cleaned = text
-    // Strip ALL intent verbs (same pattern as everywhere else)
     .replace(INTENT_VERB_PATTERN, " ")
     .replace(/\b(contact|number|phone|mobile|tel|whatsapp|call|reach)\b/gi, " ")
     .replace(/\b(is|for|of|my|name)\b/gi, " ")
@@ -151,7 +137,6 @@ function buildContactDescription(
   email: string,
   original: string
 ): string {
-  // Strip intent keywords from the original before storing
   const cleanOriginal = stripIntentKeywords(safeString(original));
   if (cleanOriginal.length > 0) return cleanOriginal;
   const parts = [name, "contact", phone || email].filter(Boolean);
@@ -190,21 +175,14 @@ function isNoteContent(text: string, entities: SaveEntity[] = []): boolean {
   if (looksLikePinOrCode(text)) return true;
   if (looksLikeMeetingOrReminder(lower)) return true;
   if (looksLikeBankOrIdInfo(lower)) return true;
-
   if (looksLikeRealContact(text, entities)) return false;
-
   if (hasPhoneNumber(text) || hasEmail(text)) return true;
 
   return false;
 }
 
-/**
- * Returns the best content string to store, always using the already-stripped
- * message so intent keywords can never leak via this path.
- */
 function getBestSaveContent(stripped: string, entities: SaveEntity[] = []): string {
   if (stripped.length >= 2) {
-    // extractContent works on the already-stripped text
     const extracted = safeString(extractContent(stripped));
     const extractedIsRicher =
       extracted.length >= 2 &&
@@ -252,26 +230,17 @@ function extractPriceValue(text: string): number | null {
   return null;
 }
 
-// Matches a trailing price number optionally followed by a unit word.
-// Covers: "50 b", "300 bags", "1200 kg", "500 cartons", "200 pieces", etc.
 const TRAILING_PRICE_WITH_UNIT =
   /\d+(?:,\d{3})*(?:\.\d{1,2})?\s*(?:bags?|pcs?|pieces?|units?|litres?|liters?|ltrs?|kg|kgs?|grams?|tons?|crates?|cartons?|bundles?|rolls?|packs?|sachets?|bottles?|tins?|wraps?|yards?|metres?|meters?|dozens?|b|k)?\s*$/gi;
 
 function extractProductName(text: string): string {
   const cleaned = text
-    // 1. Strip ALL intent verbs anywhere in the string
     .replace(INTENT_VERB_PATTERN, " ")
-    // 2. Strip price/cost/sell keywords
     .replace(/\b(price|prices|cost|amount|sell|selling)\b/gi, " ")
-    // 3. Strip linking verbs
     .replace(/\b(is|are|was|were)\b/gi, " ")
-    // 4. Strip currency symbol + number  (₦500, NGN 1200)
     .replace(/(?:₦|ngn)\s*\d+(?:,\d{3})*(?:\.\d{1,2})?/gi, " ")
-    // 5. Strip trailing price number + optional unit  ("50 bags", "300 b", "1200")
     .replace(TRAILING_PRICE_WITH_UNIT, " ")
-    // 6. Strip punctuation separators
     .replace(/[=:,-]/g, " ")
-    // 7. Strip filler articles / prepositions
     .replace(/\b(of|for|the|a|an|my)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -325,10 +294,6 @@ function resolveFinalCategory(content: string, entities: SaveEntity[] = []): str
   return detected;
 }
 
-/**
- * Builds the note/contact title from already-stripped content.
- * No intent keywords can reach here because `content` is always pre-stripped.
- */
 function buildBetterTitle(content: string, category: string): string {
   if (category === "contact") {
     const possibleName = extractContactName(content);
@@ -446,10 +411,6 @@ export async function handleSave(
       return handleBulkPriceSave(cleanMessage, userId);
     }
 
-    // ── ONE stripping pass — used everywhere from this point forward ─────────
-    // stripSaveCommand removes only the leading verb (for routing detection).
-    // stripIntentKeywords then removes any remaining intent verbs anywhere in
-    // the string. After this line, NO intent keyword can appear in saved data.
     const strippedMessage = stripIntentKeywords(stripSaveCommand(cleanMessage));
 
     const forcedNote =
@@ -458,7 +419,6 @@ export async function handleSave(
         !looksLikePriceMessage(strippedMessage, entities) &&
         !looksLikeRealContact(strippedMessage, entities));
 
-    // Always derive content from strippedMessage — never from cleanMessage
     const rawContent = forcedNote
       ? strippedMessage
       : getBestSaveContent(strippedMessage, entities);
@@ -492,7 +452,6 @@ export async function handleSave(
         });
       }
 
-      // ── Duplicate / similar price check (from duplicateChecks.ts) ─────────
       const { exact: exactPrice, similar: similarPrice } =
         await findExistingPrice(userId, productName, price);
 
@@ -533,14 +492,7 @@ export async function handleSave(
         });
       }
 
-      // ── No duplicate — insert ─────────────────────────────────────────────
-      const normalizedContent = buildPriceNormalizedContent({
-        productName: `${productName} ${normalizedProductName}`,
-        category,
-        description: content,
-        currency: "NGN",
-      });
-
+      // ── No duplicate — insert price ───────────────────────────────────────
       const { data: insertedPrice, error: insertPriceError } =
         await serverSupabase
           .from("product_prices")
@@ -551,7 +503,7 @@ export async function handleSave(
             currency: "NGN",
             category,
             description: content,
-            normalized_content: normalizedContent,
+            // normalized_content handled by DB trigger or omitted safely
           })
           .select("id, product_name, price, currency, category, created_at")
           .single();
@@ -598,14 +550,6 @@ export async function handleSave(
 
     const contentHash = generateHash(finalContent);
 
-    const normalizedContent = buildNoteNormalizedContent(
-      finalContent,
-      contactName,
-      contactPhone,
-      contactEmail
-    );
-
-    // ── Duplicate / similar note check (from duplicateChecks.ts) ──────────
     const { exact: exactNote, similar: similarNote } =
       await findExistingNote(userId, contentHash, title);
 
@@ -640,7 +584,7 @@ export async function handleSave(
       });
     }
 
-    // ── No duplicate — insert ─────────────────────────────────────────────
+    // ── No duplicate — insert note ────────────────────────────────────────
     const { data: inserted, error: insertError } = await serverSupabase
       .from("notes")
       .insert({
@@ -649,7 +593,8 @@ export async function handleSave(
         title,
         category,
         content_hash: contentHash,
-        normalized_content: normalizedContent,
+        // FIX: removed normalized_content — column not in schema cache
+        // Add a DB trigger to auto-populate it, or reload schema cache in Supabase
         metadata: {
           entities,
           originalMessage: cleanMessage,

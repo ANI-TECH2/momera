@@ -14,6 +14,7 @@ import {
   SafeAreaView,
 } from "react-native";
 import { useRouter } from "expo-router";
+import * as Linking from "expo-linking";
 import { useAuth } from "@/lib/auth";
 import { COLORS } from "@/lib/constants";
 import AuthOnboarding from "./onboarding";
@@ -28,8 +29,12 @@ export default function Login() {
   const [remember, setRemember] = useState(false);
   const [focused, setFocused] = useState<"email" | "password" | null>(null);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const [showResetPassword, setShowResetPassword] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetMessage, setResetMessage] = useState("");
 
-  const { signInWithEmail, signInWithGoogle, loading: authLoading } = useAuth();
+  const { signInWithEmail, signInWithGoogle, loading: authLoading, supabase } = useAuth();
   const router = useRouter();
 
   const isLoading = loadingType !== null;
@@ -93,6 +98,38 @@ export default function Login() {
       setError(e.message || "Google login failed");
     } finally {
       setLoadingType(null);
+    }
+  };
+
+  const handleResetPassword = async () => {
+    setResetMessage("");
+
+    if (!resetEmail.trim()) {
+      setResetMessage("Please enter your email");
+      return;
+    }
+
+    setResetLoading(true);
+
+    try {
+      const resetUrl = Linking.createURL("/reset-password");
+
+      const { error } = await supabase.auth.resetPasswordForEmail(
+        resetEmail.trim(),
+        {
+          redirectTo: resetUrl,
+        }
+      );
+
+      if (error) throw error;
+
+      setResetMessage("✓ Check your email for reset instructions");
+      setResetEmail("");
+      setTimeout(() => setShowResetPassword(false), 2000);
+    } catch (e: any) {
+      setResetMessage(e.message || "Failed to send reset email");
+    } finally {
+      setResetLoading(false);
     }
   };
 
@@ -192,6 +229,11 @@ export default function Login() {
                 <Text style={styles.rememberText}>Remember me</Text>
               </Pressable>
 
+              {/* FORGOT PASSWORD */}
+              <Pressable onPress={() => setShowResetPassword(true)}>
+                <Text style={styles.forgotPassword}>Forgot password?</Text>
+              </Pressable>
+
               {/* ERROR */}
               {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -231,6 +273,70 @@ export default function Login() {
             </View>
           </ScrollView>
         </Animated.View>
+
+        {/* ✅ RESET PASSWORD MODAL */}
+        {showResetPassword && (
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <Pressable
+                style={styles.closeButton}
+                onPress={() => setShowResetPassword(false)}
+              >
+                <Ionicons name="close" size={24} color={COLORS.text} />
+              </Pressable>
+
+              <Text style={styles.modalTitle}>Reset Password</Text>
+              <Text style={styles.modalSubtitle}>
+                Enter your email and we'll send you a reset link
+              </Text>
+
+              {/* EMAIL INPUT */}
+              <View style={styles.inputWrapper}>
+                <Ionicons name="mail-outline" size={20} color={COLORS.textSecondary} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Email"
+                  placeholderTextColor={COLORS.textSecondary}
+                  value={resetEmail}
+                  onChangeText={setResetEmail}
+                  keyboardType="email-address"
+                />
+              </View>
+
+              {/* MESSAGE */}
+              {resetMessage ? (
+                <Text
+                  style={[
+                    styles.error,
+                    resetMessage.includes("✓") && styles.success,
+                  ]}
+                >
+                  {resetMessage}
+                </Text>
+              ) : null}
+
+              {/* SEND BUTTON */}
+              <Pressable
+                style={[styles.primaryButton, resetLoading && styles.buttonDisabled]}
+                onPress={handleResetPassword}
+                disabled={resetLoading}
+              >
+                {resetLoading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.primaryText}>Send Reset Link</Text>
+                )}
+              </Pressable>
+
+              {/* BACK TO LOGIN */}
+              <Pressable onPress={() => setShowResetPassword(false)}>
+                <Text style={styles.link}>
+                  <Text style={styles.linkStrong}>Back</Text> to login
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
         </View>
       </SafeAreaView>
     </KeyboardAvoidingView>
@@ -388,4 +494,55 @@ const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
 
   loadingText: { marginTop: 10, color: COLORS.text },
+
+  // ✅ RESET PASSWORD MODAL
+  modalOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  modalContent: {
+    backgroundColor: COLORS.card,
+    borderRadius: 24,
+    padding: 24,
+    width: "85%",
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+
+  closeButton: {
+    alignSelf: "flex-end",
+    marginBottom: 12,
+  },
+
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: COLORS.text,
+    marginBottom: 8,
+  },
+
+  modalSubtitle: {
+    fontSize: 13,
+    color: COLORS.textSecondary,
+    marginBottom: 16,
+  },
+
+  forgotPassword: {
+    color: COLORS.primary,
+    fontWeight: "600",
+    fontSize: 13,
+    marginTop: 8,
+    marginBottom: 12,
+  },
+
+  success: {
+    color: "#10b981",
+  },
 });

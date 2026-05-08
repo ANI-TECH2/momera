@@ -32,10 +32,9 @@ export async function GET(req: Request) {
         .order("created_at", { ascending: false }),
 
       supabase
-        .from("chat_messages")
-        .select("role, message, created_at")
+        .from("chat_history")
+        .select("role, content as message, created_at")
         .eq("user_id", cleanUserId)
-        .gt("expires_at", new Date().toISOString())
         .order("created_at", { ascending: true }),
     ]);
 

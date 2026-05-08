@@ -234,9 +234,9 @@ const styles = StyleSheet.create({
   // ✅ dynamic onboarding (flexShrink allows natural sizing)
   onboardingSection: {
     flexShrink: 1,
-    minHeight: 160,
-    maxHeight: 280,
-    marginBottom: 24,
+    minHeight: 120,
+    maxHeight: 180,
+    marginBottom: 12,
     justifyContent: "center",
   },
 
@@ -246,8 +246,8 @@ const styles = StyleSheet.create({
   },
 
   formContent: {
-    padding: 20,
-    paddingBottom: 60,
+    padding: 12,
+    paddingBottom: 40,
   },
 
   card: {

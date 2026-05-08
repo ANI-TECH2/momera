@@ -38,10 +38,23 @@
         }
       ],
       "expo-document-picker",
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-sqlite"
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "deepLinking": {
+      "prefixes": [
+        "memora://",
+        "https://axtylmnniuilqxrntcjq.supabase.co/auth/v1/callback"
+      ],
+      "config": {
+        "screens": {
+          "(auth)/reset-password": "reset-password?token_hash=:token_hash&type=:type",
+          "(auth)/login": "login"
+        }
+      }
     },
     "extra": {
       "router": {},

@@ -6,6 +6,7 @@ import React, {
   useState,
   ReactNode,
 } from "react";
+import { Platform } from "react-native";
 import { Session, User, SupabaseClient } from "@supabase/supabase-js";
 import * as WebBrowser from "expo-web-browser";
 import * as Linking from "expo-linking";
@@ -38,13 +39,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const initializeAuth = async () => {
       try {
-        const {
-          data: { session: currentSession },
-          error,
-        } = await supabase.auth.getSession();
+        let currentSession = null;
 
-        if (error) {
-          console.error("[Auth] getSession error:", error);
+        if (Platform.OS === "web") {
+          const {
+            data: { session },
+            error,
+          } = await supabase.auth.getSessionFromUrl({ storeSession: true });
+
+          if (!error && session) {
+            currentSession = session;
+          }
+        }
+
+        if (!currentSession) {
+          const {
+            data: { session },
+            error,
+          } = await supabase.auth.getSession();
+
+          if (error) {
+            console.error("[Auth] getSession error:", error);
+          }
+
+          currentSession = session;
         }
 
         if (!isMounted) return;

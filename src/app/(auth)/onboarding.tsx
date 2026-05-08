@@ -143,55 +143,56 @@ export default function AuthOnboarding({ compact = false }: { compact?: boolean 
 const styles = StyleSheet.create({
   page: {
     flex: 1,
-    padding: 20,
+    padding: 16,
     backgroundColor: COLORS.background,
   },
 
   topBar: {
-    marginBottom: 20,
+    marginBottom: 12,
   },
 
   pageTitle: {
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: "800",
     color: COLORS.text,
   },
 
   pageSubtitle: {
-    fontSize: 15,
+    fontSize: 13,
     color: COLORS.textSecondary,
-    marginTop: 4,
+    marginTop: 2,
   },
 
   stepText: {
     color: COLORS.textSecondary,
+    fontSize: 12,
   },
 
   slide: {
     justifyContent: "center",
     alignItems: "center",
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
   },
 
   title: {
-    fontSize: 22,
+    fontSize: 18,
     fontWeight: "700",
     color: COLORS.text,
-    marginTop: 20,
+    marginTop: 12,
   },
 
   desc: {
-    fontSize: 15,
+    fontSize: 13,
     color: COLORS.textSecondary,
     textAlign: "center",
-    marginTop: 8,
+    marginTop: 6,
   },
 
   /* CHAT UI */
   chatBox: {
     width: "100%",
-    padding: 16,
-    borderRadius: 16,
+    padding: 12,
+    borderRadius: 12,
     backgroundColor: COLORS.card,
     borderWidth: 1,
     borderColor: COLORS.border,
@@ -200,59 +201,61 @@ const styles = StyleSheet.create({
   chatBubbleUser: {
     alignSelf: "flex-end",
     backgroundColor: COLORS.primary,
-    padding: 10,
-    borderRadius: 12,
-    marginBottom: 8,
+    padding: 8,
+    borderRadius: 10,
+    marginBottom: 6,
   },
 
   chatBubbleBot: {
     alignSelf: "flex-start",
     backgroundColor: COLORS.background,
-    padding: 10,
-    borderRadius: 12,
+    padding: 8,
+    borderRadius: 10,
   },
 
   chatText: {
     color: "#fff",
+    fontSize: 12,
   },
 
   /* SECURE */
   secureBox: {
     alignItems: "center",
     justifyContent: "center",
-    padding: 30,
-    borderRadius: 16,
+    padding: 20,
+    borderRadius: 12,
     backgroundColor: COLORS.card,
     borderWidth: 1,
     borderColor: COLORS.border,
   },
 
   lockIcon: {
-    fontSize: 40,
-    marginBottom: 10,
+    fontSize: 32,
+    marginBottom: 8,
   },
 
   secureText: {
     color: COLORS.textSecondary,
+    fontSize: 13,
   },
 
   /* DOTS */
   dots: {
     flexDirection: "row",
     justifyContent: "center",
-    marginTop: 20,
-  },
-
-  dotsCompact: {
     marginTop: 12,
   },
 
+  dotsCompact: {
+    marginTop: 8,
+  },
+
   dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
     backgroundColor: COLORS.border,
-    marginHorizontal: 4,
+    marginHorizontal: 3,
   },
 
   dotActive: {
@@ -261,19 +264,20 @@ const styles = StyleSheet.create({
 
   /* BUTTON */
   button: {
-    marginTop: 24,
+    marginTop: 16,
     backgroundColor: COLORS.primary,
-    padding: 16,
-    borderRadius: 14,
+    padding: 14,
+    borderRadius: 12,
     alignItems: "center",
   },
 
   buttonText: {
     color: "#fff",
     fontWeight: "700",
+    fontSize: 15,
   },
 
   pageCompact: {
-    padding: 12,
-  },
+    padding: 8,
+  }
 });

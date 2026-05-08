@@ -1,6 +1,6 @@
 /**
  * chat+api.ts — Final Optimized Version
- * Fixes: Greeting Latency, Number-based Deletion, "Yes" for Updates, and Missing detectIntent
+ * Fixes: column alias bug, greeting latency, number-based deletion, "Yes" for updates
  */
 
 import { getNlp } from "@/server/nlp/setup";
@@ -50,7 +50,10 @@ type PendingDeleteMatch = {
 };
 
 // --- RESOLVERS ---
-function resolveDeleteConfirmation(message: string, pendingMatches: PendingDeleteMatch[]): PendingDeleteMatch | null {
+function resolveDeleteConfirmation(
+  message: string,
+  pendingMatches: PendingDeleteMatch[]
+): PendingDeleteMatch | null {
   const lower = message.toLowerCase().trim();
   const numMatch =
     lower.match(/^#?(\d+)$/) ||
@@ -58,12 +61,9 @@ function resolveDeleteConfirmation(message: string, pendingMatches: PendingDelet
 
   if (numMatch) {
     const wordToNum: Record<string, number> = {
-      first: 1,
-      one: 1,
-      second: 2,
-      two: 2,
-      third: 3,
-      three: 3,
+      first: 1, one: 1,
+      second: 2, two: 2,
+      third: 3, three: 3,
       fourth: 4,
       fifth: 5,
     };
@@ -84,13 +84,23 @@ function resolveDeleteConfirmation(message: string, pendingMatches: PendingDelet
   );
 }
 
-function resolveSaveDuplicateResponse(message: string): "replace" | "keep_both" | null {
+function resolveSaveDuplicateResponse(
+  message: string
+): "replace" | "keep_both" | null {
   const lower = message.toLowerCase().trim();
 
-  if (/^(yes|yep|yeah|y|update|replace|overwrite|correct|ok|sure|do it)[\s.!]*$/i.test(lower))
+  if (
+    /^(yes|yep|yeah|y|update|replace|overwrite|correct|ok|sure|do it)[\s.!]*$/i.test(
+      lower
+    )
+  )
     return "replace";
 
-  if (/^(no|nope|keep both|both|different|save both|new|another)[\s.!]*$/i.test(lower))
+  if (
+    /^(no|nope|keep both|both|different|save both|new|another)[\s.!]*$/i.test(
+      lower
+    )
+  )
     return "keep_both";
 
   return null;
@@ -108,7 +118,6 @@ async function detectIntent(message: string): Promise<DetectionResult> {
     console.log(
       `[FAST/COMPROMISE] matched intent="${fastIntent}" | message="${cleanMessage}"`
     );
-
     return {
       intent: fastIntent as AppIntent,
       score: FAST_INTENT_SCORE,
@@ -129,7 +138,11 @@ async function detectIntent(message: string): Promise<DetectionResult> {
       `[NLP] processed intent="${result.intent}" score=${nlpScore.toFixed(3)}`
     );
 
-    if (result.intent && result.intent !== "intent.none" && nlpScore >= INTENT_THRESHOLD) {
+    if (
+      result.intent &&
+      result.intent !== "intent.none" &&
+      nlpScore >= INTENT_THRESHOLD
+    ) {
       const nlpEntities = normalizeNlpEntities(result.entities || []);
 
       console.log(
@@ -162,7 +175,46 @@ async function detectIntent(message: string): Promise<DetectionResult> {
   };
 }
 
-// --- MAIN HANDLER ---
+// --- GET HANDLER (Load chat history) ---
+export async function GET(req: Request) {
+  try {
+    const userId = await getUserIdFromRequest(req);
+    if (!userId) {
+      return Response.json({ message: "Unauthorized" }, { status: 401 });
+    }
+
+    // FIX: Select real column names — no aliases in Supabase .select()
+    const { data, error } = await serverSupabase
+      .from("chat_history")
+      .select("id, role, type, content, metadata, session_id, created_at")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: true })
+      .limit(50);
+
+    if (error) {
+      console.error("[GET CHAT] DB error:", error);
+      return Response.json({ message: "Error loading history" }, { status: 500 });
+    }
+
+    // Remap content → message for the client
+    const messages = (data || []).map((row) => ({
+      id: row.id,
+      role: row.role,
+      type: row.type,
+      message: row.content,   // <-- rename here in JS, not in SQL
+      metadata: row.metadata,
+      session_id: row.session_id,
+      created_at: row.created_at,
+    }));
+
+    return Response.json({ messages });
+  } catch (err) {
+    console.error("[GET CHAT] Error:", err);
+    return Response.json({ message: "Error" }, { status: 500 });
+  }
+}
+
+// --- POST HANDLER (Process message) ---
 export async function POST(req: Request) {
   const start = Date.now();
 
@@ -175,22 +227,19 @@ export async function POST(req: Request) {
       return Response.json({ message: "Empty" }, { status: 400 });
     }
 
-    // A. FAST PATH (Greeting / Help)
+    // A. FAST PATH (Greeting / Help — no auth needed)
     const fastIntent = detectIntentCompromise(message);
 
-    if (fastIntent) {
+    if (fastIntent === "intent.greet" || fastIntent === "intent.help") {
       console.log(`[FAST PATH] instant response intent="${fastIntent}"`);
-
-      if (fastIntent === "intent.greet" || fastIntent === "intent.help") {
-        return Response.json({
-          type: "assistant",
-          message:
-            fastIntent === "intent.greet"
-              ? buildGreetingMessage()
-              : getGuidanceMessage(""),
-          intent: fastIntent,
-        });
-      }
+      return Response.json({
+        type: "assistant",
+        message:
+          fastIntent === "intent.greet"
+            ? buildGreetingMessage()
+            : getGuidanceMessage(""),
+        intent: fastIntent,
+      });
     }
 
     // B. AUTH
@@ -200,16 +249,19 @@ export async function POST(req: Request) {
       return Response.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    // C. CONTEXT CHECK
+    // C. CONTEXT CHECK — pending delete confirmation
     const context = await getPendingContext(userId);
 
     if (context?.pending_delete_matches?.length) {
-      const match = resolveDeleteConfirmation(message, context.pending_delete_matches);
+      const match = resolveDeleteConfirmation(
+        message,
+        context.pending_delete_matches
+      );
 
       if (match) {
         console.log(`[DELETE] confirmed match="${match.label}"`);
-
         await clearAllPending(userId);
+
         const { success } = await deleteRecord(userId, {
           id: match.id,
           label: match.label,
@@ -220,29 +272,31 @@ export async function POST(req: Request) {
           type: "assistant",
           message: success
             ? `🗑️ Deleted "${match.label}"`
-            : "Failed to delete.",
+            : "Failed to delete. Please try again.",
         });
       }
     }
 
+    // C2. CONTEXT CHECK — pending save duplicate
     if (context?.pending_save_duplicate) {
       const choice = resolveSaveDuplicateResponse(message);
 
       if (choice) {
         console.log(`[SAVE DUPLICATE] user choice="${choice}"`);
-
         const dup = context.pending_save_duplicate as PendingSaveDuplicate;
         await clearAllPending(userId);
 
-        if (choice === "replace") await replaceDuplicate(userId, dup);
-        else
+        if (choice === "replace") {
+          await replaceDuplicate(userId, dup);
+        } else {
           await keepBoth(userId, {
             content: dup.newContent,
             title: dup.newTitle,
             category: dup.category,
           });
+        }
 
-        return Response.json({ type: "assistant", message: "✅ Success!" });
+        return Response.json({ type: "assistant", message: "✅ Done!" });
       }
     }
 
@@ -253,14 +307,15 @@ export async function POST(req: Request) {
       `[PIPELINE] final intent="${detection.intent}" source=${detection.source} time=${Date.now() - start}ms`
     );
 
-    if (!detection.intent) {
+    if (!detection.intent || detection.intent === "intent.none") {
       return Response.json({
         type: "assistant",
         message: getGuidanceMessage(message),
       });
     }
 
-    let handlerRes;
+    // E. ROUTE TO HANDLER
+    let handlerRes: Response;
 
     switch (detection.intent) {
       case "intent.save":
@@ -275,6 +330,18 @@ export async function POST(req: Request) {
       case "intent.list":
         handlerRes = await handleList(message, userId, detection.entities);
         break;
+      case "intent.greet":
+        return Response.json({
+          type: "assistant",
+          message: buildGreetingMessage(),
+          intent: "intent.greet",
+        });
+      case "intent.help":
+        return Response.json({
+          type: "assistant",
+          message: getGuidanceMessage(message),
+          intent: "intent.help",
+        });
       default:
         return Response.json({
           type: "assistant",
@@ -284,46 +351,61 @@ export async function POST(req: Request) {
 
     const data = await handlerRes.json();
 
-    // E. CONTEXT SAVE
+    // F. SAVE CONTEXT if awaiting confirmation
     if (data.awaiting_confirmation || data.duplicate) {
-      await serverSupabase.from("chat_context").upsert(
-        {
-          user_id: userId,
-          pending_delete_matches: data.matches || null,
-          pending_save_duplicate: data.duplicate ? data : null,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "user_id" }
-      );
+      await serverSupabase
+        .from("chat_context")
+        .upsert(
+          {
+            user_id: userId,
+            pending_delete_matches: data.matches || null,
+            pending_save_duplicate: data.duplicate ? data : null,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "user_id" }
+        );
     }
 
     return Response.json(data);
   } catch (err) {
     console.error("[API ERROR]", err);
-    return Response.json({ message: "Error" }, { status: 500 });
+    return Response.json({ message: "Something went wrong. Please try again." }, { status: 500 });
   }
 }
 
 // --- UTILS ---
-function normalizeMessage(s: string) {
+function normalizeMessage(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
-function safeText(v: unknown) {
+
+function safeText(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
 
-async function getUserIdFromRequest(req: Request) {
+async function getUserIdFromRequest(req: Request): Promise<string | null> {
   const auth = req.headers.get("Authorization");
+  console.log("[AUTH] Received header:", auth ? "Bearer ***" : "null");
   if (!auth?.startsWith("Bearer ")) return null;
 
-  const { data: { user } } = await serverSupabase.auth.getUser(auth.slice(7));
-  return user?.id || null;
+  const token = auth.slice(7);
+  console.log("[AUTH] Token length:", token.length);
+
+  try {
+    const {
+      data: { user },
+    } = await serverSupabase.auth.getUser(token);
+    console.log("[AUTH] User ID:", user?.id || "null");
+    return user?.id || null;
+  } catch (err) {
+    console.error("[AUTH] getUser error:", err);
+    return null;
+  }
 }
 
 async function getPendingContext(userId: string) {
   const { data } = await serverSupabase
     .from("chat_context")
-    .select("*")
+    .select("pending_delete_matches, pending_save_duplicate")
     .eq("user_id", userId)
     .maybeSingle();
 
@@ -340,7 +422,7 @@ async function clearAllPending(userId: string) {
     .eq("user_id", userId);
 }
 
-function uniqueEntities(entities: ExtractedEntity[]) {
+function uniqueEntities(entities: ExtractedEntity[]): ExtractedEntity[] {
   const seen = new Set<string>();
   return entities.filter((e) => {
     const key = `${e.entity}:${e.sourceText.toLowerCase()}`;
@@ -359,9 +441,7 @@ function extractEntitiesHeuristic(text: string): ExtractedEntity[] {
       entities.push({ entity: "phone", sourceText: p, value: p })
     );
 
-  const email = text.match(
-    /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi
-  );
+  const email = text.match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi);
   if (email)
     email.forEach((e) =>
       entities.push({ entity: "email", sourceText: e, value: e })
@@ -378,22 +458,28 @@ function normalizeNlpEntities(items: any[]): ExtractedEntity[] {
   }));
 }
 
-function inferIntentFromEntities(text: string, entities: any[]): AppIntent | null {
+function inferIntentFromEntities(
+  text: string,
+  entities: ExtractedEntity[]
+): AppIntent | null {
   const lower = text.toLowerCase();
 
   if (entities.length > 0 && /\b(save|remember|keep)\b/.test(lower))
     return "intent.save";
-
-  if (/\b(show|find|get)\b/.test(lower)) return "intent.retrieve";
-  if (/\b(delete|remove)\b/.test(lower)) return "intent.delete";
+  if (/\b(show|find|get|what|retrieve)\b/.test(lower)) return "intent.retrieve";
+  if (/\b(delete|remove|erase)\b/.test(lower)) return "intent.delete";
+  if (/\b(list|all|everything)\b/.test(lower)) return "intent.list";
 
   return null;
 }
 
-function buildGreetingMessage() {
-  return "Hello Victor! I'm Memora. Ready to help.";
+function buildGreetingMessage(): string {
+  const hour = new Date().getHours();
+  const greeting =
+    hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+  return `${greeting}! I'm Memora. Just tell me what to save or find. 😊`;
 }
 
-function getGuidanceMessage(msg: string) {
-  return "Try: 'Save my note' or 'Show my items'.";
+function getGuidanceMessage(msg: string): string {
+  return `I'm not sure what you mean. Try:\n• "Save John's number 08012345678"\n• "Find John's number"\n• "Delete John's contact"\n• "Show all my contacts"`;
 }
