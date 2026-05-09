@@ -190,6 +190,21 @@ export default function ChatScreen() {
     // Pro user: use API (Supabase) but check local cache first
     setLoading(true);
 
+    // For pro users, show a "thinking" message immediately
+    if (userPlan === 'pro') {
+      const thinkingMessage: ChatMessage = {
+        id: `${Date.now()}-thinking`,
+        role: "assistant",
+        type: "assistant",
+        message: "🤔 Thinking...",
+        createdAt: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, thinkingMessage]);
+      requestAnimationFrame(() => {
+        scrollToBottom();
+      });
+    }
+
     requestAnimationFrame(() => {
       scrollToBottom();
     });
@@ -277,20 +292,27 @@ export default function ChatScreen() {
         createdAt: new Date().toISOString(),
       };
 
-      setMessages((prev) => [...prev, assistantMessage]);
+      setMessages((prev) => {
+        // Replace the thinking message with the actual response
+        const filtered = prev.filter(msg => msg.id !== `${Date.now()}-thinking`);
+        return [...filtered, assistantMessage];
+      });
     } catch (error) {
       console.log("[Chat] Send error:", error);
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `${Date.now()}-error`,
-          role: "assistant",
-          type: "system",
-          message: "Something went wrong. Please try again.",
-          createdAt: new Date().toISOString(),
-        },
-      ]);
+      const errorMessage: ChatMessage = {
+        id: `${Date.now()}-error`,
+        role: "assistant",
+        type: "system",
+        message: "Something went wrong. Please try again.",
+        createdAt: new Date().toISOString(),
+      };
+
+      setMessages((prev) => {
+        // Replace the thinking message with the error
+        const filtered = prev.filter(msg => msg.id !== `${Date.now()}-thinking`);
+        return [...filtered, errorMessage];
+      });
     } finally {
       setLoading(false);
       requestAnimationFrame(() => {
