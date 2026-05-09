@@ -20,7 +20,7 @@ import { ChatBubble } from "@/components/chat/ChatBubble";
 import { ChatMessage } from "@/lib/types";
 import { COLORS } from "@/lib/constants";
 import { detectIntentCompromise } from "@/server/nlp/reflex";
-import { notesCache, pricesCache, imagesCache, documentsCache } from "@/lib/cache";
+import { notesCache, pricesCache, imagesCache, documentsCache, offlineDetector } from "@/lib/cache";
 
 const WELCOME_MESSAGE: ChatMessage = {
   id: "welcome",
@@ -189,11 +189,15 @@ export default function ChatScreen() {
 
     // Pro user: use API (Supabase) but check local cache first
     setLoading(true);
+    const isOnline = !offlineDetector.isOffline();
+    const thinkingId = `${Date.now()}-thinking`;
+    let savedLocally = false;
+    let localSaveResponse = "Saved locally. Will sync when you're back online.";
 
     // For pro users, show a "thinking" message immediately
     if (userPlan === 'pro') {
       const thinkingMessage: ChatMessage = {
-        id: `${Date.now()}-thinking`,
+        id: thinkingId,
         role: "assistant",
         type: "assistant",
         message: "🤔 Thinking...",
@@ -228,6 +232,8 @@ export default function ChatScreen() {
               updated_at: new Date().toISOString(),
             };
             await pricesCache.set(price.id, price);
+            savedLocally = true;
+            localSaveResponse = `💰 Saved price locally: $${price.price}`;
           } else {
             // Save as note locally
             const note = {
@@ -242,8 +248,32 @@ export default function ChatScreen() {
               updated_at: new Date().toISOString(),
             };
             await notesCache.set(note.id, note);
+            savedLocally = true;
+            localSaveResponse = `✅ Saved locally: ${content}`;
           }
         }
+      }
+
+      // If we're offline and the user is saving, return success immediately
+      if (intent === 'intent.save' && !isOnline) {
+        const assistantMessage: ChatMessage = {
+          id: `${Date.now()}-assistant`,
+          role: 'assistant',
+          type: 'assistant',
+          message: localSaveResponse,
+          createdAt: new Date().toISOString(),
+        };
+
+        setMessages((prev) => {
+          const filtered = prev.filter((msg) => msg.id !== thinkingId);
+          return [...filtered, assistantMessage];
+        });
+
+        setLoading(false);
+        requestAnimationFrame(() => {
+          scrollToBottom();
+        });
+        return;
       }
 
       // Check local cache first for retrieve/list operations
@@ -294,23 +324,24 @@ export default function ChatScreen() {
 
       setMessages((prev) => {
         // Replace the thinking message with the actual response
-        const filtered = prev.filter(msg => msg.id !== `${Date.now()}-thinking`);
+        const filtered = prev.filter((msg) => msg.id !== thinkingId);
         return [...filtered, assistantMessage];
       });
     } catch (error) {
       console.log("[Chat] Send error:", error);
+      const responseText = savedLocally ? localSaveResponse : "Something went wrong. Please try again.";
 
       const errorMessage: ChatMessage = {
         id: `${Date.now()}-error`,
         role: "assistant",
         type: "system",
-        message: "Something went wrong. Please try again.",
+        message: responseText,
         createdAt: new Date().toISOString(),
       };
 
       setMessages((prev) => {
-        // Replace the thinking message with the error
-        const filtered = prev.filter(msg => msg.id !== `${Date.now()}-thinking`);
+        // Replace the thinking message with the error or local save confirmation
+        const filtered = prev.filter((msg) => msg.id !== thinkingId);
         return [...filtered, errorMessage];
       });
     } finally {
