@@ -396,28 +396,53 @@ export default function ChatScreen() {
 
     // Search notes
     const notes = await notesCache.getAll();
-    const matchedNotes = notes.filter(e => 
-      e.data.content.toLowerCase().includes(query) || 
+    const matchedNotes = notes.filter((e) =>
+      e.data.content.toLowerCase().includes(query) ||
       e.data.title.toLowerCase().includes(query)
     );
 
     // Search prices
     const prices = await pricesCache.getAll();
-    const matchedPrices = prices.filter(e => 
-      e.data.product_name.toLowerCase().includes(query) || 
-      (e.data.description?.toLowerCase().includes(query))
+    const matchedPrices = prices.filter((e) =>
+      e.data.product_name.toLowerCase().includes(query) ||
+      e.data.description?.toLowerCase().includes(query)
     );
 
-    if (matchedNotes.length === 0 && matchedPrices.length === 0) {
+    // Search images
+    const images = await imagesCache.getAll();
+    const matchedImages = images.filter((e) =>
+      e.data.file_name.toLowerCase().includes(query) ||
+      e.data.description?.toLowerCase().includes(query)
+    );
+
+    // Search documents
+    const documents = await documentsCache.getAll();
+    const matchedDocs = documents.filter((e) =>
+      e.data.file_name.toLowerCase().includes(query) ||
+      e.data.description?.toLowerCase().includes(query)
+    );
+
+    if (
+      matchedNotes.length === 0 &&
+      matchedPrices.length === 0 &&
+      matchedImages.length === 0 &&
+      matchedDocs.length === 0
+    ) {
       return query ? `No results found for "${query}".` : "You have no saved items.";
     }
 
     let response = '';
     if (matchedNotes.length > 0) {
-      response += `📝 Notes found:\n${matchedNotes.map(e => e.data.content).join('\n---\n')}\n\n`;
+      response += `📝 Notes found:\n${matchedNotes.map((e) => e.data.content).join('\n---\n')}\n\n`;
     }
     if (matchedPrices.length > 0) {
-      response += `💰 Prices found:\n${matchedPrices.map(e => `${e.data.product_name}: $${e.data.price}`).join('\n')}`;
+      response += `💰 Prices found:\n${matchedPrices.map((e) => `${e.data.product_name}: $${e.data.price}`).join('\n')}\n\n`;
+    }
+    if (matchedImages.length > 0) {
+      response += `🖼️ Images found:\n${matchedImages.map((e) => `• ${e.data.file_name} - ${e.data.description}`).join('\n')}\n\n`;
+    }
+    if (matchedDocs.length > 0) {
+      response += `📄 Documents found:\n${matchedDocs.map((e) => `• ${e.data.file_name} - ${e.data.description}`).join('\n')}`;
     }
     return response;
   };
@@ -479,48 +504,84 @@ export default function ChatScreen() {
 
   const checkLocalCacheForPro = async (message: string, intent: any) => {
     const query = message.replace(/\b(show|find|search|get|retrieve|look|display|what|where)\b/gi, '').toLowerCase().trim();
-    
+    const isImageQuery = /\b(image|images|photo|photos|picture|pictures|screenshot|screenshots|icloud|gallery)\b/.test(query);
+    const isDocumentQuery = /\b(document|documents|file|files|pdf|doc|docs|attachment|table)\b/.test(query);
+    const isPriceQuery = /\b(price|prices|cost|rate|amount)\b/.test(query);
+    const isNoteQuery = /\b(note|notes|memo|memos|reminder|reminders)\b/.test(query);
+
     if (intent === 'intent.retrieve' && query) {
       const notes = await notesCache.getAll();
       const prices = await pricesCache.getAll();
       const images = await imagesCache.getAll();
       const documents = await documentsCache.getAll();
       
-      const matchedNotes = notes.filter(e => 
+      const matchedNotes = notes.filter((e) => 
         e.data.content.toLowerCase().includes(query) || 
         e.data.title.toLowerCase().includes(query)
       );
       
-      const matchedPrices = prices.filter(e => 
+      const matchedPrices = prices.filter((e) => 
         e.data.product_name.toLowerCase().includes(query) || 
         e.data.description?.toLowerCase().includes(query)
       );
 
-      const matchedImages = images.filter(e =>
+      const matchedImages = images.filter((e) =>
         e.data.file_name.toLowerCase().includes(query) ||
         e.data.description?.toLowerCase().includes(query)
       );
 
-      const matchedDocs = documents.filter(e =>
+      const matchedDocs = documents.filter((e) =>
         e.data.file_name.toLowerCase().includes(query) ||
         e.data.description?.toLowerCase().includes(query)
       );
 
-      if (matchedNotes.length > 0 || matchedPrices.length > 0 || matchedImages.length > 0 || matchedDocs.length > 0) {
+      const imageOnlyQuery = /^(my\s+)?(saved\s+)?(all\s+)?(images|image|photos|photo|pictures|picture|screenshots|screenshot|icloud images?)$/.test(query);
+      const docOnlyQuery = /^(my\s+)?(saved\s+)?(all\s+)?(documents|document|files|file|pdfs|pdf|docs|doc|attachments?)$/.test(query);
+
+      if (imageOnlyQuery && images.length > 0) {
+        return `🖼️ Images found locally:\n${images.map((e) => `• ${e.data.file_name} - ${e.data.description}`).join('\n')}`;
+      }
+
+      if (docOnlyQuery && documents.length > 0) {
+        return `📄 Documents found locally:\n${documents.map((e) => `• ${e.data.file_name} - ${e.data.description}`).join('\n')}`;
+      }
+
+      if (
+        matchedNotes.length > 0 ||
+        matchedPrices.length > 0 ||
+        matchedImages.length > 0 ||
+        matchedDocs.length > 0
+      ) {
         let response = '';
         if (matchedNotes.length > 0) {
-          response += `📝 Notes found locally:\n${matchedNotes.map(e => e.data.content).join('\n---\n')}\n\n`;
+          response += `📝 Notes found locally:\n${matchedNotes.map((e) => e.data.content).join('\n---\n')}\n\n`;
         }
         if (matchedPrices.length > 0) {
-          response += `💰 Prices found locally:\n${matchedPrices.map(e => `${e.data.product_name}: $${e.data.price}`).join('\n')}\n\n`;
+          response += `💰 Prices found locally:\n${matchedPrices.map((e) => `${e.data.product_name}: $${e.data.price}`).join('\n')}\n\n`;
         }
         if (matchedImages.length > 0) {
-          response += `🖼️ Images found locally:\n${matchedImages.map(e => `• ${e.data.file_name} - ${e.data.description}`).join('\n')}\n\n`;
+          response += `🖼️ Images found locally:\n${matchedImages.map((e) => `• ${e.data.file_name} - ${e.data.description}`).join('\n')}\n\n`;
         }
         if (matchedDocs.length > 0) {
-          response += `📄 Documents found locally:\n${matchedDocs.map(e => `• ${e.data.file_name} - ${e.data.description}`).join('\n')}`;
+          response += `📄 Documents found locally:\n${matchedDocs.map((e) => `• ${e.data.file_name} - ${e.data.description}`).join('\n')}`;
         }
         return response;
+      }
+
+      if (isImageQuery && images.length > 0) {
+        return `🖼️ Images found locally:\n${images.map((e) => `• ${e.data.file_name} - ${e.data.description}`).join('\n')}`;
+      }
+
+      if (isDocumentQuery && documents.length > 0) {
+        return `📄 Documents found locally:\n${documents.map((e) => `• ${e.data.file_name} - ${e.data.description}`).join('\n')}`;
+      }
+
+      if (isPriceQuery && prices.length > 0) {
+        return `💰 Prices found locally:\n${prices.map((e) => `${e.data.product_name}: $${e.data.price}`).join('\n')}`;
+      }
+
+      if (isNoteQuery && notes.length > 0) {
+        return `📝 Notes found locally:\n${notes.map((e) => e.data.content).join('\n---\n')}`;
       }
     }
 

@@ -36,12 +36,13 @@ export function detectIntentCompromise(message: string): FastIntent | null {
   }
 
   // 3. RETRIEVE (Updated for Prices & Rates)
-  // Added: "how much", "price", "cost", "rate", "amount"
+  // Added: "how much", "price", "cost", "rate", "amount", "image", "photo", "document", "file"
   if (
     doc.has("(find|show|search|lookup|look up|retrieve|fetch|get|remind me|recall|tell me|where is)") ||
     doc.has("(what is|what was|what's|do i have)") ||
+    doc.has("(image|photo|picture|document|file|screenshot)") ||
     /^(how\s+much|price\s+of|cost\s+of|rate\s+of|amount\s+for)\b/i.test(lowerMsg) ||
-    /\b(price|cost|rate|how\s+much)\b/i.test(lowerMsg)
+    /\b(price|cost|rate|how\s+much|image|photo|picture|document|file)\b/i.test(lowerMsg)
   ) {
     return "intent.retrieve";
   }
