@@ -17,6 +17,7 @@ import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
 import { useAuth } from "@/lib/auth";
 import { COLORS, API_BASE } from "@/lib/constants";
+import { imagesCache, documentsCache, offlineDetector } from "@/lib/cache";
 
 type PickedFile = {
   uri: string;
@@ -129,12 +130,8 @@ export default function UploadScreen() {
 
   const uploadFile = async () => {
     const token = session?.access_token;
-
-    console.log("[Upload] API_BASE:", API_BASE);
-    console.log("[Upload] token exists:", !!token);
-    console.log("[Upload] selectedFile:", selectedFile);
-    console.log("[Upload] description:", description.trim());
-    console.log("[Upload] fileType:", fileType);
+    const userId = useAuth().user?.id;
+    const isOnline = !offlineDetector.isOffline();
 
     if (!token) {
       Alert.alert("Login Required", "Please log in to upload files.");
@@ -151,6 +148,7 @@ export default function UploadScreen() {
     }
 
     setLoading(true);
+    let savedLocally = false;
 
     try {
       const fileName =
@@ -163,9 +161,39 @@ export default function UploadScreen() {
         selectedFile.mimeType ||
         (fileType === "image" ? "image/jpeg" : "application/octet-stream");
 
+      // Save locally first
+      const fileId = Date.now().toString();
+      const cache = fileType === "image" ? imagesCache : documentsCache;
+
+      await cache.set(fileId, {
+        id: fileId,
+        user_id: userId!,
+        file_name: fileName,
+        file_path: selectedFile.uri,
+        file_size: selectedFile.size,
+        mime_type: mimeType,
+        description: description.trim(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      savedLocally = true;
+
+      // If offline, show success and return
+      if (!isOnline) {
+        Alert.alert(
+          "Saved locally",
+          `${fileType === "image" ? "Image" : "Document"} saved locally. Will sync when you're back online.`
+        );
+        setSelectedFile(null);
+        setDescription("");
+        setFileType("document");
+        router.back();
+        return;
+      }
+
+      // Try to upload to API if online
       const formData = new FormData();
 
-      // On web, fetch the URI and convert to Blob; on mobile, use the URI directly
       if (Platform.OS === "web") {
         const response = await fetch(selectedFile.uri);
         const blob = await response.blob();
@@ -181,12 +209,6 @@ export default function UploadScreen() {
       formData.append("description", description.trim());
       formData.append("fileType", fileType);
 
-      console.log("[Upload] sending file:", {
-        uri: selectedFile.uri,
-        name: fileName,
-        type: mimeType,
-      });
-
       const res = await fetch(`${API_BASE}/api/upload`, {
         method: "POST",
         headers: {
@@ -196,9 +218,6 @@ export default function UploadScreen() {
       });
 
       const rawText = await res.text();
-      console.log("[Upload] status:", res.status);
-      console.log("[Upload] raw response:", rawText);
-
       let data: any = null;
       try {
         data = rawText ? JSON.parse(rawText) : null;
@@ -207,29 +226,53 @@ export default function UploadScreen() {
       }
 
       if (!res.ok) {
-        Alert.alert(
-          "Upload failed",
-          data?.error || `Server error: ${res.status}`
-        );
-        return;
+        if (savedLocally) {
+          Alert.alert(
+            "Saved locally",
+            "File saved locally. Will sync when you're back online."
+          );
+        } else {
+          Alert.alert(
+            "Upload failed",
+            data?.error || `Server error: ${res.status}`
+          );
+          return;
+        }
+      } else if (data?.error) {
+        if (savedLocally) {
+          Alert.alert(
+            "Saved locally",
+            "File saved locally. Will sync when you're back online."
+          );
+        } else {
+          Alert.alert("Upload failed", data.error);
+          return;
+        }
+      } else {
+        Alert.alert("Success", "File saved successfully.");
       }
 
-      if (data?.error) {
-        Alert.alert("Upload failed", data.error);
-        return;
-      }
-
-      Alert.alert("Success", "File saved successfully.");
       setSelectedFile(null);
       setDescription("");
       setFileType("document");
       router.back();
     } catch (error: any) {
       console.error("[Upload] uploadFile error:", error);
-      Alert.alert(
-        "Error",
-        error?.message || "Upload failed. Please try again."
-      );
+      if (savedLocally) {
+        Alert.alert(
+          "Saved locally",
+          "File saved locally. Will sync when you're back online."
+        );
+        setSelectedFile(null);
+        setDescription("");
+        setFileType("document");
+        router.back();
+      } else {
+        Alert.alert(
+          "Error",
+          error?.message || "Upload failed. Please try again."
+        );
+      }
     } finally {
       setLoading(false);
     }

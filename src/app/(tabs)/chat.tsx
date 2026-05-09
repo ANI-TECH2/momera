@@ -469,10 +469,10 @@ export default function ChatScreen() {
       response += `💰 Prices (${prices.length}):\n${prices.map(e => `  • ${e.data.product_name}: $${e.data.price}`).join('\n')}\n\n`;
     }
     if (images.length > 0) {
-      response += `🖼️ Images (${images.length})\n`;
+      response += `🖼️ Images (${images.length}):\n${images.map(e => `  • ${e.data.file_name} - ${e.data.description}`).join('\n')}\n\n`;
     }
     if (documents.length > 0) {
-      response += `📄 Documents (${documents.length})\n`;
+      response += `📄 Documents (${documents.length}):\n${documents.map(e => `  • ${e.data.file_name} - ${e.data.description}`).join('\n')}`;
     }
     return response;
   };
@@ -483,6 +483,8 @@ export default function ChatScreen() {
     if (intent === 'intent.retrieve' && query) {
       const notes = await notesCache.getAll();
       const prices = await pricesCache.getAll();
+      const images = await imagesCache.getAll();
+      const documents = await documentsCache.getAll();
       
       const matchedNotes = notes.filter(e => 
         e.data.content.toLowerCase().includes(query) || 
@@ -494,13 +496,29 @@ export default function ChatScreen() {
         e.data.description?.toLowerCase().includes(query)
       );
 
-      if (matchedNotes.length > 0 || matchedPrices.length > 0) {
+      const matchedImages = images.filter(e =>
+        e.data.file_name.toLowerCase().includes(query) ||
+        e.data.description?.toLowerCase().includes(query)
+      );
+
+      const matchedDocs = documents.filter(e =>
+        e.data.file_name.toLowerCase().includes(query) ||
+        e.data.description?.toLowerCase().includes(query)
+      );
+
+      if (matchedNotes.length > 0 || matchedPrices.length > 0 || matchedImages.length > 0 || matchedDocs.length > 0) {
         let response = '';
         if (matchedNotes.length > 0) {
           response += `📝 Notes found locally:\n${matchedNotes.map(e => e.data.content).join('\n---\n')}\n\n`;
         }
         if (matchedPrices.length > 0) {
-          response += `💰 Prices found locally:\n${matchedPrices.map(e => `${e.data.product_name}: $${e.data.price}`).join('\n')}`;
+          response += `💰 Prices found locally:\n${matchedPrices.map(e => `${e.data.product_name}: $${e.data.price}`).join('\n')}\n\n`;
+        }
+        if (matchedImages.length > 0) {
+          response += `🖼️ Images found locally:\n${matchedImages.map(e => `• ${e.data.file_name} - ${e.data.description}`).join('\n')}\n\n`;
+        }
+        if (matchedDocs.length > 0) {
+          response += `📄 Documents found locally:\n${matchedDocs.map(e => `• ${e.data.file_name} - ${e.data.description}`).join('\n')}`;
         }
         return response;
       }
