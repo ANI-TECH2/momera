@@ -31,7 +31,7 @@ export default function UploadScreen() {
   const [description, setDescription] = useState("");
   const [loading, setLoading] = useState(false);
   const [fileType, setFileType] = useState<"document" | "image">("document");
-  const { session } = useAuth();
+  const { session, user } = useAuth();
 
   const hasDescription = description.trim().length > 0;
   const canSubmit = !!selectedFile && hasDescription && !loading;
@@ -130,10 +130,10 @@ export default function UploadScreen() {
 
   const uploadFile = async () => {
     const token = session?.access_token;
-    const userId = useAuth().user?.id;
+    const userId = user?.id;
     const isOnline = !offlineDetector.isOffline();
 
-    if (!token) {
+    if (!token || !userId) {
       Alert.alert("Login Required", "Please log in to upload files.");
       router.push("/(auth)/login");
       return;
@@ -165,18 +165,33 @@ export default function UploadScreen() {
       const fileId = Date.now().toString();
       const cache = fileType === "image" ? imagesCache : documentsCache;
 
-      await cache.set(fileId, {
-        id: fileId,
-        user_id: userId!,
-        file_name: fileName,
-        file_path: selectedFile.uri,
-        file_size: selectedFile.size,
-        mime_type: mimeType,
-        description: description.trim(),
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      });
+      if (fileType === "image") {
+        await cache.set(fileId, {
+          id: fileId,
+          user_id: userId,
+          file_name: fileName,
+          file_path: selectedFile.uri,
+          file_size: selectedFile.size,
+          mime_type: mimeType,
+          description: description.trim(),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        } as any);
+      } else {
+        await cache.set(fileId, {
+          id: fileId,
+          user_id: userId,
+          file_name: fileName,
+          file_path: selectedFile.uri,
+          file_size: selectedFile.size,
+          file_type: mimeType,
+          description: description.trim(),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        } as any);
+      }
       savedLocally = true;
+      console.log("[Upload] File saved locally:", fileId, fileType);
 
       // If offline, show success and return
       if (!isOnline) {
