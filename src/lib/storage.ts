@@ -47,6 +47,33 @@ function createWebStorage(): StorageAPI {
   };
 }
 
+const OFFLINE_USER_ID_KEY = "auth:user-id";
+const OFFLINE_USER_PLAN_KEY = "auth:user-plan";
+
+export async function saveOfflineUserId(userId: string): Promise<void> {
+  await getStorage().setItem(OFFLINE_USER_ID_KEY, userId);
+}
+
+export async function getOfflineUserId(): Promise<string | null> {
+  return getStorage().getItem(OFFLINE_USER_ID_KEY);
+}
+
+export async function clearOfflineUserId(): Promise<void> {
+  await getStorage().removeItem(OFFLINE_USER_ID_KEY);
+}
+
+export async function saveOfflineUserPlan(plan: string): Promise<void> {
+  await getStorage().setItem(OFFLINE_USER_PLAN_KEY, plan);
+}
+
+export async function getOfflineUserPlan(): Promise<string | null> {
+  return getStorage().getItem(OFFLINE_USER_PLAN_KEY);
+}
+
+export async function clearOfflineUserPlan(): Promise<void> {
+  await getStorage().removeItem(OFFLINE_USER_PLAN_KEY);
+}
+
 export function getStorage(): StorageAPI {
   // React Native (including Expo)
   if (Platform.OS !== 'web') {

@@ -10,7 +10,7 @@ import {
   CachedImage,
   CachedDocument,
 } from "./cache";
-import { useAuth } from "./auth";
+import { getOfflineUserPlan } from "./storage";
 
 /**
  * Cache Sync Manager
@@ -64,6 +64,13 @@ export class CacheSyncManager {
    */
   async syncAll(): Promise<void> {
     if (this.isSyncing) return;
+
+    // Check if user is pro before syncing
+    const plan = await getOfflineUserPlan();
+    if (plan !== 'pro') {
+      console.log('[CacheSync] Skipping sync - user is not pro');
+      return;
+    }
 
     this.isSyncing = true;
     this.notify("syncing");

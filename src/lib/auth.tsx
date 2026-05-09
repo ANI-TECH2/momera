@@ -10,6 +10,12 @@ import { Session, User, SupabaseClient } from "@supabase/supabase-js";
 import * as WebBrowser from "expo-web-browser";
 import * as Linking from "expo-linking";
 import { createSupabaseClient } from "@/server/supabase";
+import {
+  saveOfflineUserId,
+  clearOfflineUserId,
+  saveOfflineUserPlan,
+  clearOfflineUserPlan,
+} from "@/lib/storage";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -34,6 +40,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const supabase = useMemo(() => createSupabaseClient(), []);
 
+  const persistUserId = async (userId: string | null) => {
+    try {
+      if (userId) {
+        await saveOfflineUserId(userId);
+      } else {
+        await clearOfflineUserId();
+      }
+    } catch (error) {
+      console.warn("[Auth] Could not persist offline user ID:", error);
+    }
+  };
+
   // 1. Fixed Fetch Logic to point to 'profiles' table
   const fetchPlan = async (userId: string) => {
     try {
@@ -46,12 +64,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (error) {
         console.warn('[Auth] No profile found or error:', error.message);
         setPlan('free'); 
+        await saveOfflineUserPlan('free');
       } else {
-        setPlan(data?.plan || 'free');
+        const userPlan = data?.plan || 'free';
+        setPlan(userPlan);
+        await saveOfflineUserPlan(userPlan);
       }
     } catch (error) {
       console.error('[Auth] Fetch plan failed:', error);
       setPlan('free');
+      await saveOfflineUserPlan('free');
     }
   };
 
@@ -66,6 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         if (isMounted) {
           setSession(currentSession);
+          await persistUserId(currentSession?.user?.id ?? null);
           if (currentSession?.user) {
             await fetchPlan(currentSession.user.id);
           }
@@ -84,6 +107,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!isMounted) return;
 
       setSession(newSession);
+      await persistUserId(newSession?.user?.id ?? null);
       
       if (newSession?.user) {
         await fetchPlan(newSession.user.id);
@@ -100,19 +124,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [supabase]);
 
   const signInWithEmail = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email: email.trim().toLowerCase(),
       password,
     });
     if (error) throw error;
+    await persistUserId(data?.session?.user?.id ?? null);
   };
 
   const signUpWithEmail = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email: email.trim().toLowerCase(),
       password,
     });
     if (error) throw error;
+    await persistUserId(data?.user?.id ?? data?.session?.user?.id ?? null);
   };
 
   const signInWithGoogle = async () => {
@@ -144,6 +170,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = async () => {
     setLoading(true);
     await supabase.auth.signOut();
+    await clearOfflineUserId();
+    await clearOfflineUserPlan();
     setSession(null);
     setPlan(null);
     setLoading(false);
