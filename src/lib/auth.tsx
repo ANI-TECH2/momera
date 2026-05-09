@@ -16,6 +16,7 @@ import {
   saveOfflineUserPlan,
   clearOfflineUserPlan,
 } from "@/lib/storage";
+import { offlineDetector } from "@/lib/cache";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -49,6 +50,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     } catch (error) {
       console.warn("[Auth] Could not persist offline user ID:", error);
+    }
+  };
+
+  const refreshPlan = async () => {
+    if (!session?.user?.id) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('plan')
+        .eq('id', session.user.id)
+        .single();
+
+      if (error) {
+        console.warn('[Auth] Refresh plan failed:', error.message);
+        return;
+      }
+
+      const newPlan = data?.plan || 'free';
+      if (newPlan !== plan) {
+        setPlan(newPlan);
+        await saveOfflineUserPlan(newPlan);
+        console.log('[Auth] Plan updated to:', newPlan);
+      }
+    } catch (error) {
+      console.error('[Auth] Refresh plan error:', error);
     }
   };
 
@@ -117,9 +144,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
     });
 
+    // Also refresh plan when coming back online
+    const unsubscribeOffline = offlineDetector.subscribe((online) => {
+      if (online && isMounted) {
+        refreshPlan();
+      }
+    });
+
     return () => {
       isMounted = false;
       subscription.unsubscribe();
+      unsubscribeOffline();
     };
   }, [supabase]);
 
